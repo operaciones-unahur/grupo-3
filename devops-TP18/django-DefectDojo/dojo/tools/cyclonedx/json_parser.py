@@ -1,0 +1,183 @@
+import json
+import logging
+
+import dateutil
+
+from dojo.location.feature import locations_enabled
+from dojo.models import Finding
+from dojo.tools.cyclonedx.helpers import Cyclonedxhelper
+from dojo.tools.locations import LocationData
+
+LOGGER = logging.getLogger(__name__)
+
+
+class CycloneDXJSONParser:
+    def _get_findings_json(self, file, test):
+        """Load a CycloneDX file in JSON format"""
+        data = json.load(file)
+        # Parse timestamp to get the report date
+        report_date = None
+        if data.get("metadata") and data.get("metadata").get("timestamp"):
+            report_date = dateutil.parser.parse(
+                data.get("metadata").get("timestamp"),
+            )
+        # for each component we keep data
+        components = {}
+        self._flatten_components(data.get("components", []), components)
+        # Collect product-level dependency locations for all components
+        if locations_enabled():
+            for component_data in components.values():
+                component_purl = component_data.get("purl")
+                if component_purl:
+                    component_hashes = Cyclonedxhelper()._collect_hashes(component_data.get("hashes"))
+                    license_expression = Cyclonedxhelper.extract_license_expression_json(component_data)
+                    test.unsaved_metadata.append(
+                        LocationData.dependency(
+                            purl=component_purl,
+                            artifact_hashes=component_hashes,
+                            license_expression=license_expression,
+                            component_type=component_data.get("type") or "",
+                        ),
+                    )
+        # for each vulnerabilities create one finding by component affected
+        findings = []
+        for vulnerability in data.get("vulnerabilities", []):
+            description = vulnerability.get("description")
+            detail = vulnerability.get("detail")
+            if detail:
+                if description:
+                    description += f"\n{detail}"
+                else:
+                    description = f"\n{detail}"
+            # if we have ratings we keep the first one
+            # better than always 'Medium'
+            ratings = vulnerability.get("ratings")
+            if ratings:
+                # Determine if we can use the severity field
+                # In some cases, the severity field is missing, so we can rely on either the Medium severity
+                # or the CVSS vector (retrieved further down below) to determine the severity:
+                severity = ratings[0].get("severity", "Medium")
+                severity = Cyclonedxhelper().fix_severity(severity)
+            else:
+                severity = "Medium"
+            references = ""
+            advisories = vulnerability.get("advisories", [])
+            for advisory in advisories:
+                title = advisory.get("title")
+                if title:
+                    references += f"**Title:** {title}\n"
+                url = advisory.get("url")
+                if url:
+                    references += f"**URL:** {url}\n"
+                references += "\n"
+            # for each component affected we create a finding if the "affects"
+            # node is here
+            for affect in vulnerability.get("affects", []):
+                reference = affect["ref"]  # required by the specification
+                component_name, component_version = Cyclonedxhelper()._get_component(
+                    components, reference,
+                )
+                if not description:
+                    description = "Description was not provided."
+                finding = Finding(
+                    title=f"{component_name}:{component_version} | {vulnerability.get('id')}",
+                    test=test,
+                    description=description,
+                    severity=severity,
+                    mitigation=vulnerability.get("recommendation", ""),
+                    component_name=component_name,
+                    component_version=component_version,
+                    references=references,
+                    static_finding=True,
+                    dynamic_finding=False,
+                    vuln_id_from_tool=vulnerability.get("id"),
+                )
+                if locations_enabled():
+                    if component_data := components.get(reference, {}):
+                        component_hashes = Cyclonedxhelper()._collect_hashes(component_data.get("hashes"))
+                        license_expression = Cyclonedxhelper.extract_license_expression_json(component_data)
+                        if component_purl := component_data.get("purl"):
+                            finding.unsaved_locations.append(
+                                LocationData.dependency(
+                                    purl=component_purl,
+                                    artifact_hashes=component_hashes,
+                                    license_expression=license_expression,
+                                    component_type=component_data.get("type") or "",
+                                ),
+                            )
+                        else:
+                            finding.unsaved_locations.append(
+                                LocationData.dependency(
+                                    name=component_name,
+                                    version=component_version,
+                                    artifact_hashes=component_hashes,
+                                    license_expression=license_expression,
+                                    component_type=component_data.get("type") or "",
+                                ),
+                            )
+                if report_date:
+                    finding.date = report_date
+                ratings = vulnerability.get("ratings", [])
+                for rating in ratings:
+                    if (
+                        rating.get("method") == "CVSSv3"
+                        or rating.get("method") == "CVSSv31"
+                    ):
+                        raw_vector = rating.get("vector", "")
+                        cvssv3 = Cyclonedxhelper()._get_cvssv3(raw_vector)
+                        severity = rating.get("severity")
+                        if cvssv3:
+                            finding.cvssv3 = cvssv3.clean_vector()
+                            if severity:
+                                finding.severity = Cyclonedxhelper().fix_severity(severity)
+                            else:
+                                finding.severity = cvssv3.severities()[0]
+                vulnerability_ids = []
+                # set id as first vulnerability id
+                if vulnerability.get("id"):
+                    vulnerability_ids.append(vulnerability.get("id"))
+                # check references to see if we have other vulnerability ids
+                for reference in vulnerability.get("references", []):
+                    vulnerability_id = reference.get("id")
+                    if vulnerability_id:
+                        vulnerability_ids.append(vulnerability_id)
+                if vulnerability_ids:
+                    finding.unsaved_vulnerability_ids = vulnerability_ids
+                # if there is some CWE
+                cwes = vulnerability.get("cwes")
+                if cwes and len(cwes) > 0:
+                    finding.cwe = cwes[0]
+                    finding.unsaved_cwes = cwes
+                # Check for mitigation
+                analysis = vulnerability.get("analysis")
+                if analysis:
+                    # Preserve the raw VEX analysis block on the finding so downstream
+                    # consumers can round-trip state/justification/response/detail. This
+                    # is an inert in-memory attribute; the mapping below is all the OSS
+                    # importer itself does with it.
+                    finding.unsaved_vex = analysis
+                    state = analysis.get("state")
+                    if state:
+                        if state in {"resolved", "resolved_with_pedigree", "not_affected"}:
+                            finding.is_mitigated = True
+                            finding.active = False
+                        elif state == "false_positive":
+                            finding.false_p = True
+                            finding.active = False
+                        if not finding.active:
+                            detail = analysis.get("detail")
+                            if detail:
+                                finding.mitigation += f"\n**This vulnerability is mitigated and/or suppressed:** {detail}\n"
+                findings.append(finding)
+        return findings
+
+    def _flatten_components(self, components, flatted_components):
+        for component in components:
+            if "components" in component:
+                self._flatten_components(
+                    component.get("components", []), flatted_components,
+                )
+            # according to specification 1.4, 'bom-ref' is mandatory but some
+            # tools don't provide it
+            if "bom-ref" in component:
+                flatted_components[component["bom-ref"]] = component

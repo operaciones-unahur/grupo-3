@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% load static %}
+{% block content %}
+    {{ block.super }}
+    <h3>Edit Endpoint</h3>
+    <form class="" method="post">
+        {% csrf_token %}
+        {% include "dojo/form_fields.html" with form=form %}
+        <div class="form-group">
+            <div class="col-sm-offset-2 col-sm-10">
+                <input class="btn btn-primary"
+                       type="submit"
+                       name="edit_endpoint"
+                       value="Submit" />
+            </div>
+        </div>
+    </form>
+{% endblock content %}

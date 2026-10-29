@@ -1,0 +1,2186 @@
+/* Legacy border-radius:0 removed — modern design uses rounded corners */
+
+.table-condensed > tbody > tr > td,
+.table-condensed > tbody > tr > th,
+.table-condensed > tfoot > tr > td,
+.table-condensed > tfoot > tr > th,
+.table-condensed > thead > tr > td,
+.table-condensed > thead > tr > th {
+	padding-top: 12px;
+}
+
+.table-condensed > tbody > tr > td:first-child,
+.table-condensed > tbody > tr > th:first-child,
+.table-condensed > tfoot > tr > td:first-child,
+.table-condensed > tfoot > tr > th:first-child,
+.table-condensed > thead > tr > td:first-child,
+.table-condensed > thead > tr > th:first-child {
+	padding-left: 15px;
+}
+
+.btn-group .btn:not(:first-child) {
+    margin-left: 6px;
+}
+
+.min,
+.max {
+    overscroll-behavior: none!important;
+    overflow-x: clip!important;
+}
+
+a {
+  color: var(--color-dd-interactive-700);
+}
+
+/* Panel-default btn-primary: the solid brand orange (not a transparent ghost) */
+.panel-default .btn-primary {
+    background-color: var(--color-dd-primary-700, #cc3a00);
+    color: var(--color-dd-on-primary, #fff8f0);
+    border: 1px solid var(--color-dd-primary-700, #cc3a00);
+}
+
+.panel-default .btn-primary:hover {
+    background-color: var(--color-dd-primary-800, #a62f00);
+    color: var(--color-dd-on-primary, #fff8f0);
+    border: 1px solid var(--color-dd-primary-800, #a62f00);
+}
+
+.btn-primary {
+    color: var(--color-dd-on-primary, #fff8f0);
+    background-color: var(--color-dd-primary-700);
+	  /*border-style: none!important;*/
+}
+
+.btn-primary:hover {
+    background-color: var(--color-dd-primary-800);
+}
+
+/* btn-secondary handled in Tailwind components layer */
+
+.panel-heading .dropdown-toggle:focus {
+    outline: 5px auto -webkit-focus-ring-color;
+    outline-offset: -2px;
+}
+
+#base-content .clearfix .pagination .dropdown-toggle:focus {
+    outline: 5px auto #005f73;
+    outline-offset: -3px;
+}
+.table-responsive .dropdown-toggle:focus {
+    outline: 5px auto -webkit-focus-ring-color;
+    text-decoration: none;
+}
+
+/* Removed: commented-out btn-primary state overrides (dead code) */
+
+.secondary-color {
+  background-color: var(--color-dd-interactive-700);
+  color: white;
+}
+
+.h1,
+.h2,
+.h3,
+h1,
+h2 {
+    margin-top: 10px;
+    margin-bottom: 10px;
+}
+
+h3 {
+  margin-top: 5px;
+  margin-bottom: 2px;
+  font-size: 18px;
+  line-height: 18px;
+}
+
+/* Removed: a text-decoration reset — handled by Tailwind base */
+
+/* .nav.nav-second-level.nav-up — removed, old sidebar flyout */
+
+/* Removed: .nav-tabs rules — now in tailwind.css with indigo theme */
+
+.nav-tabs .dropdown .badge{
+    color: #fff;
+    background-color: var(--color-dd-interactive-700);
+}
+
+.nav-tabs .active-color .badge{
+    color: var(--color-dd-interactive-700);
+    background-color: #ffffff;
+}
+
+/* .navbar-brand — removed, old topbar brand styling */
+
+.row {
+    margin-top: 5px;
+}
+
+/* A row of cards is spaced by the cards' own bottom margin; the extra
+   row offset above would make the gap between card rows uneven. */
+.row:has(> :is(.panel, .card, .stat-card, .row):first-child),
+.row:has(> [class*="col-"] > :is(.panel, .card, .stat-card, .row):first-child) {
+    margin-top: 0;
+    /* Cards that wrap onto another line are spaced by their own margin;
+       the grid's row gap on top of it would double the space. */
+    row-gap: 0;
+}
+
+form.filters {
+    margin-top: 0px;
+    padding: 0px 5px 5px;
+}
+
+.filters select, .filters textarea, .filters input[type="text"], .filters input[type="password"], .filters input[type="datetime"], .filters input[type="datetime-local"], .filters input[type="date"], .filters input[type="month"], .filters input[type="time"], .filters input[type="week"], .filters input[type="number"], .filters input[type="email"], .filters input[type="url"], .filters input[type="search"], .filters input[type="tel"], .filters input[type="color"], .filters .uneditable-input {
+    width: 100%;
+    border-radius: 4px;
+    background-color: #fff;
+    background-image: none;
+    border: 1px solid #ccc;
+}
+
+.filters hr {
+    margin-top: 5px;
+    margin-bottom: 5px;
+}
+
+input[type="file"] {
+    border: 0px;
+    width: auto;
+}
+
+/* Removed: .form-control width — handled by Tailwind component */
+
+/* Removed: .bs-searchbox — bootstrap-select removed */
+
+.dojo-input-group {
+    width: 73%;
+    z-index: 1;
+}
+
+.home-icon a {
+    padding: 0;
+}
+
+/* Removed: .hilite* classes — jquery-highlight plugin removed */
+
+#swagger-ui-container h2 {
+    font-size: 20px;
+    line-height: 20px;
+    padding: 0;
+}
+
+#swagger-ui-container h3 {
+    font-size: 15px;
+    line-height: 20px;
+    padding: 0;
+}
+
+#swagger-ui-container .footer {
+    display: none;
+}
+
+div#header {
+    background: #FFF;
+}
+
+.zero {
+    border: 0;
+    padding: 0;
+    width: 0;
+}
+
+body #header form#api_selector .input input#input_apiKey {
+    width: 100%;
+    max-width: 500px;
+}
+
+.prod_name {
+    padding-right: 15px;
+    white-space: nowrap;
+    width: 1px;
+}
+
+.breadcrumb a.active {
+    color: #777;
+}
+
+.badge.badge-count {
+    background-color: var(--color-badge-count, #b3261e);
+}
+
+.badge.badge-count.badge-count0 {
+    background-color: #5cb85c;
+}
+
+/* Removed: .dropdown-toggle-h — not referenced in any template */
+
+a.eng_link {
+    margin-bottom: 10px;
+}
+
+.ui-helper-reset {
+    font-size: 96%;
+}
+
+#tabs.ui-widget {
+    font-size: .8em;
+}
+
+form.metric_form,
+form.metric_form select,
+form.metric_form p,
+form.metric_form ul,
+form.metric_form ul li {
+    list-style-type: none;
+    font-size: 11px
+}
+
+form.metric_form label {
+    font-size: 11px
+}
+
+form.metric_form input[type='submit'] {
+    vertical-align: text-bottom;
+}
+
+form.metric_form p label {
+    font-weight: 700;
+}
+
+.filters .panel-body {
+    padding: 5px;
+}
+
+.filters .panel-heading {
+    border-top: 1px solid var(--color-border);
+}
+
+.filters .panel-heading:first-child {
+    border-top: 0px solid var(--color-border);
+}
+
+/* panel-blue, panel-red, panel-green, panel-yellow removed — stat cards now use .stat-card */
+
+.nowrap {
+    white-space: nowrap;
+}
+
+.metrics-chart {
+    height: 300px;
+}
+
+.metrics-half-chart {
+    height: 300px;
+    width: 100%;
+    max-width: 460px;
+    display: inline-block;
+    margin-bottom: 40px;
+}
+
+.table-400 {
+    width: 40%;
+}
+
+.table-600 {
+    width: 66%;
+}
+
+.table-full {
+    width: 100%;
+}
+
+.metric-half {
+    display: inline-block;
+    vertical-align: top;
+    width: 38%;
+}
+
+/* Metrics responsive: stack charts + tables on mobile/tablet */
+@media (max-width: 768px) {
+    .metric-half {
+        display: block;
+        width: 100%;
+    }
+    .metrics-half-chart {
+        max-width: 100%;
+        display: block;
+    }
+    .metrics-chart {
+        height: 200px;
+    }
+    .table-400, .table-600 {
+        width: 100%;
+    }
+}
+
+.field-help-text {
+    display: block;
+    font-size: 75%;
+    margin: -10px 1px 10px;
+}
+
+.error-page-box {
+    display: inline-block;
+    vertical-align: middle;
+    padding-right: 25px;
+}
+
+.inline-block {
+    display: inline-block;
+}
+
+a.search-finding {
+    color: #09d;
+}
+
+.no-bullets {
+    list-style: none;
+}
+
+.inline-form,
+.inline-label {
+    display: inline;
+}
+
+div#upload-risk form select[multiple="multiple"] {
+    height: 400px;
+    width: auto;
+}
+
+.controls.file label {
+    width: 20%;
+    text-align: center;
+}
+
+.protip {
+    text-align: center;
+    margin-bottom: 10px;
+}
+
+.control-group input[type="file"] {
+    display: inline-block;
+    width: 0;
+}
+
+form#replace_risk_file label {
+    text-align: center;
+    width: 88px;
+}
+
+form#replace_risk_file input[type="file"] {
+    display: inline-block;
+    width: 0;
+}
+
+form ul {
+    list-style-type: none;
+    margin-left: 0px;
+    padding-left: 0px
+}
+
+form ul li a#reset-password,
+form ul li a#forgot-username {
+    color: rgb(51, 122, 183)
+}
+
+form ul#id_accepted_findings {
+    list-style: none;
+    margin-left: 0;
+    overflow: scroll;
+    max-height: 500px;
+}
+
+form ul#id_accepted_findings li {
+    padding: 5px;
+}
+
+form ul#id_accepted_findings li:nth-child(odd) {
+    background-color: #f0f0f0;
+}
+
+div#upload-risk .helptext,
+div.show_add_findings_form .helptext {
+    display: block;
+    font-size: 13px;
+    font-style: italic;
+    margin: auto;
+    text-align: center;
+}
+
+a.accept-all-findings {
+    cursor: pointer;
+}
+
+div.danger-zone {
+    padding: 0;
+    text-align: center;
+}
+
+div.danger-zone h3 {
+    margin: 0px;
+}
+
+div.danger-zone p {
+    margin-top: 10px;
+}
+
+.meta_profile {
+    -moz-border-radius: 4px;
+    -webkit-border-radius: 4px;
+    background-color: #f0f0f0;
+    border: 1px solid;
+    border-color: #d0d0d0;
+    border-radius: 4px;
+    color: #000;
+    padding: 8px 35px 8px 14px;
+}
+
+.meta_profile b {
+    display: inline-block;
+    width: 40%;
+}
+
+ul.messages {
+    -moz-border-radius: 4px;
+    -webkit-border-radius: 4px;
+    background-color: #f0f0f0;
+    border-radius: 4px;
+    margin: 0 0 10px;
+    padding: 5px;
+}
+
+.messages li {
+    display: block;
+    font-size: 16px;
+    margin: 0 0 2px;
+    padding: 2px 3px;
+}
+
+.top,
+form ul#id_accepted_findings input {
+    vertical-align: top;
+}
+
+.messages li.warning {
+    color: #c09853;
+}
+
+.messages li.error {
+    color: #b94a48;
+}
+
+.Pass,
+.messages li.success {
+    color: #468847;
+}
+
+.pass_fail {
+    -moz-border-radius: 4px;
+    -webkit-border-radius: 4px;
+    background-color: #f89406;
+    color: #fff;
+    display: inline-block;
+    font-size: 11.844px;
+    font-weight: 700;
+    line-height: 14px;
+    padding: 2px 8px;
+    text-shadow: 0 -1px 0 rgba(0, 0, 0, 0.25);
+    vertical-align: baseline;
+    white-space: nowrap;
+}
+
+.dojo-sup {
+  font-size: smaller;
+  vertical-align: super;
+}
+.Fail {
+    background-color: #b94a48;
+}
+
+.Pass {
+    background-color: #468847;
+}
+
+/* Severity tags: the tint with its own ink, ringed in the same hue (the
+   currentColor ring). */
+.severity {
+    font-size: 80%;
+    color: var(--color-text);
+    box-shadow: inset 0 0 0 1.5px color-mix(in srgb, currentColor 55%, transparent);
+}
+
+.severity-Info {
+    background-color: var(--color-severity-info-bg);
+    color: var(--color-severity-info-text);
+}
+
+.severity-Low {
+    background-color: var(--color-severity-low-bg);
+    color: var(--color-severity-low-text);
+}
+
+.severity-Medium {
+    background-color: var(--color-severity-medium-bg);
+    color: var(--color-severity-medium-text);
+}
+
+.severity-High {
+    background-color: var(--color-severity-high-bg);
+    color: var(--color-severity-high-text);
+}
+
+.severity-Critical {
+    background-color: var(--color-severity-critical-bg);
+    color: var(--color-severity-critical-text);
+}
+
+/* SLA badges: the same tint, ink and ring as the severity tags. Green is
+   inside the SLA, red is overdue, orange is remediated late, blue is
+   remediated on time. */
+.age-red {
+    background-color: var(--color-severity-critical-bg);
+    color: var(--color-severity-critical-text);
+}
+
+.age-green {
+    background-color: var(--color-green-100);
+    color: var(--color-green-800);
+}
+
+.age-blue {
+    background-color: var(--color-severity-low-bg);
+    color: var(--color-severity-low-text);
+}
+
+.age-orange {
+    background-color: var(--color-severity-high-bg);
+    color: var(--color-severity-high-text);
+}
+
+.dojo-search {
+    clear: right;
+    display: inline-block;
+    float: right;
+    margin: 0;
+}
+
+/* Removed: .pagination base rules — now in tailwind.css */
+
+/* Inside a card, the count / page size row shares the card's 1.25rem inset. */
+.pagination-in-panel {
+    margin: 0;
+    padding: 0.75rem 1.25rem 0;
+}
+
+#risk_acceptance table form {
+    margin: 0;
+}
+
+#risk_acceptance table td {
+    vertical-align: middle;
+}
+
+div.eng_info {
+    background-color: #f5f5f5;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    margin-top: 10px;
+    min-height: 135px;
+    padding: 7px;
+    width: 100%;
+    max-width: 280px;
+}
+
+div.prod_info {
+    background-color: #f5f5f5;
+    border-radius: 4px;
+    margin-top: 10px;
+    padding: 10px 0;
+    border: 1px solid rgba(0, 0, 0, 0.15);
+    margin-bottom: 10px;
+}
+
+br {
+    border: 0;
+
+}
+
+.filters h3 {
+    font-size: 122%;
+    line-height: 20px;
+    margin: 0px 0 5px 0;
+}
+
+.filters .helptext {
+    display: none;
+}
+
+/* Removed: .table-bordered th blue bg — now uses Tailwind surface colors */
+
+span.report_note {
+    display: inline-block;
+    font-size: 11px;
+}
+
+span.report_note * {
+    font-size: 11px;
+}
+
+div.pagination li form {
+    display: inline-block;
+    margin-left: 3px;
+}
+
+div.pagination li form select {
+    display: inline-block;
+    font-size: 11px;
+    width: auto;
+}
+
+div.page_select {
+    float: left;
+}
+
+input#simple_search {
+    width: 100%;
+}
+
+.support-page-wrapper {
+    display: flex;
+    flex-flow: column;
+    align-items: center;
+}
+
+.support-container {
+    display: flex;
+    width: 75%;
+    margin-bottom: 150px;
+}
+
+.support-box {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    flex: 1;
+    font-size: 16px;
+    font-weight: 500;
+}
+
+.support-box.shape {
+    border-radius: 12px;
+    padding: 10px 25px 25px 25px;
+    margin: 0px 10px 0px 10px;
+    transition: transform .5s;
+}
+
+.community {
+    color: var(--color-text);
+    background-color: var(--color-surface-3);
+}
+
+.community h2,
+.community p {
+    color: inherit;
+}
+
+.commercial {
+    color: #e7e7e7;
+    background-color: #1d4565;
+}
+
+/* Override Tailwind's explicit h2/p color inside dark commercial box */
+.commercial h2,
+.commercial p,
+.commercial i {
+    color: inherit;
+}
+
+.support-box.hover:hover {
+    transform: translateY(-10px);
+}
+
+/* Support page responsive: stack boxes on mobile/tablet */
+@media (max-width: 768px) {
+    .support-container {
+        flex-direction: column;
+        width: 100%;
+    }
+    .support-box.shape {
+        margin: 0 0 1rem 0;
+    }
+}
+
+.btn-primary.support {
+    font-size: 16px;
+    font-weight: 500;
+    padding: 10px;
+    border-radius: 6px;
+    margin: 20px 10px 0px 10px;
+    border: none;
+}
+
+.btn-primary.support.dark:hover {
+    color: var(--color-text-muted);
+    background-color: var(--color-surface-2);
+}
+
+.btn-primary.support.light:hover {
+    color: #e7e7e7;
+    background-color: #235175;
+}
+
+.divider {
+    border-bottom: 1px solid;
+    margin: 10px 25px 15px 25px;
+}
+
+.divider.dark {
+    border-color: var(--color-text-muted);
+}
+
+.divider.light {
+    border-color: #e7e7e7;
+}
+
+.dojo-modals-wrapper {
+    display: none;
+    flex-direction: column;
+    position: fixed;
+    z-index: 1;
+    padding-top: 100px;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+}
+
+.footer {
+    background-color: #F8F8F8;
+    border-top: 1px solid #dcdcdc;
+    padding: 30px 0;
+}
+
+.footer img {
+    opacity: .7;
+    transition: opacity .25s ease-in-out;
+    -moz-transition: opacity .25s ease-in-out;
+    -webkit-transition: opacity .25s ease-in-out;
+}
+
+.footer img:hover {
+    opacity: 1
+}
+
+.metric-data .row {
+    margin-bottom: 40px;
+}
+
+/* Removed: .navbar a.brand — old topbar */
+
+.metric-data .well {
+    padding: 7px;
+    font-size: 12px !important;
+}
+
+.metric-data h4 {
+    font-size: 14px;
+    font-weight: bold;
+}
+
+body.popup {
+    padding-top: 0;
+}
+/* Removed: body { padding-top: 50px } — old Bootstrap fixed navbar offset */
+/* Removed: html/body/.container height: 100% — old Bootstrap layout */
+
+body #header form#api_selector .input a#explore:hover,
+body #header form#api_selector .input a#explore {
+    background-color: #09d;
+}
+
+.controls ul {
+    list-style-type: none;
+    margin: 0
+}
+
+/* dataTables_filter override removed — now in datatables-dd.css */
+
+/* .navbar li.search-form — removed, old topbar search */
+
+label,
+input,
+button,
+select,
+textarea {
+    font-size: 14px
+}
+
+ul.left {
+    text-align: left
+}
+
+.breadcrumb.main {
+    margin-top: 10px;
+}
+
+.form-read-only {
+    margin-left: 20px;
+}
+
+.centered {
+    text-align: center;
+}
+
+.centered table {
+    margin: auto;
+    text-align: left;
+}
+
+table.centered th {
+    text-align: center;
+}
+
+table.centered td {
+    text-align: center;
+}
+
+.text-critical {
+    color: var(--color-severity-critical-text)
+}
+
+.text-high {
+    color: var(--color-severity-high-text)
+}
+
+.text-medium {
+    color: var(--color-severity-medium-text)
+}
+
+.text-low {
+    color: var(--color-severity-low-text)
+}
+
+input[type="checkbox"] {
+    display: inline;
+    width: 22px;
+    vertical-align: middle;
+    margin-top: 0px;
+    border: 0;
+    padding: 0px;
+    box-shadow: none
+}
+
+/* Removed: .navbar-top-links dropdown widths — old topbar */
+
+.footer {
+    font-size: x-small
+}
+
+.footer img.logo {
+    width: 5%;
+    height: 5%;
+}
+
+td .fa-fw {
+    font-size: 18px;
+}
+
+.same-height-panel-row .panel {
+    min-height: 150px;
+}
+
+.view-finding .panel-body pre, .endpoints pre {
+    background-color: transparent;
+    border: 0px;
+    padding: 0px;
+    white-space: pre-wrap;
+    white-space: -moz-pre-wrap;
+    white-space: -pre-wrap;
+    white-space: -o-pre-wrap;
+    word-break: normal;
+}
+
+h4.finding-title {
+    width: 90%;
+}
+
+@media (min-width: 768px) {
+    .dl-horizontal dt {
+        width: 180px;
+    }
+
+    .dl-horizontal dd {
+        margin-left: 200px;
+    }
+
+}
+
+.panel-heading span.clickable {
+    cursor: pointer;
+}
+
+#test-pulldown .popover-content {
+    color: #000000;
+}
+
+span.endpoint_product {
+    display: block;
+    font-size: 14px;
+    font-weight: normal;
+    margin-top: 3px;
+}
+
+#vuln_endpoints ul {
+    list-style-type: square;
+    margin-left: 5px;
+    padding-left: 5px;
+    width: 100%;
+}
+
+.endpoint-panel {
+    overflow-x: scroll;
+    max-height: 300px;
+}
+
+.endpoints i.fa-circle {
+    font-size: 7px;
+    vertical-align: middle;
+}
+
+/* Removed: .dropdown-menu hard overrides — now in tailwind.css */
+.dropdown-menu > li > a.text-danger {
+    color: #a94442!important;
+}
+
+/* Removed: th sort icon/link styling — now handled by tailwind.css tablesorter */
+
+@font-face {
+    font-family: 'icomoon';
+    src: url('../fonts/icomoon.eot?2eclin');
+    src: url('../fonts/icomoon.eot?2eclin#iefix') format('embedded-opentype'),
+    url('../fonts/icomoon.ttf?2eclin') format('truetype'),
+    url('../fonts/icomoon.woff?2eclin') format('woff'),
+    url('../fonts/icomoon.svg?2eclin#icomoon') format('svg');
+    font-weight: normal;
+    font-style: normal;
+}
+
+[class^="icon-"], [class*=" icon-"] {
+    font-family: 'icomoon';
+    speak: none;
+    font-style: normal;
+    font-weight: normal;
+    font-variant: normal;
+    text-transform: none;
+    line-height: 1;
+
+    /* Better Font Rendering =========== */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+.icon-grab-reorder-down:before {
+    content: "\e902";
+}
+
+.icon-grab-reorder-up:before {
+    content: "\e903";
+}
+
+.icon-grab-reorder:before {
+    content: "\e904";
+}
+
+.icon-add-template:before {
+    content: "\e900";
+}
+
+.icon-plusminus:before {
+    content: "\e800";
+}
+
+.icon-page-break:before {
+    content: "\e901";
+}
+
+.icon-user-check:before {
+    content: "\e975";
+}
+
+/* Removed: #side-menu, li#minimize-menu-li — old sidebar rules */
+
+.announcement-banner {
+    margin: 0px -15px;
+    border-radius: 0px 0px 4px 4px;
+    color: #000;
+}
+
+.announcement-banner a {
+    color: #0645ad;
+    text-decoration: underline;
+}
+
+.announcement-banner strong,
+.announcement-banner b {
+    color: #222;
+}
+
+.banner-toggle {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    margin-left: 6px;
+    color: inherit;
+    cursor: pointer;
+    line-height: 1;
+}
+
+.banner-toggle:focus,
+.banner-toggle:active {
+    outline: none;
+    box-shadow: none;
+}
+
+.banner-toggle:not(.collapsed) .fa-caret-down {
+    transform: rotate(180deg);
+}
+
+.banner-expanded {
+    margin-top: 8px;
+}
+
+/* The base CSS reset zeroes list markers and block margins, so markdown lists
+   and paragraphs in an expanded banner would otherwise render flush. */
+.banner-expanded p,
+.banner-expanded ul,
+.banner-expanded ol {
+    margin: 0 0 0.5em;
+}
+
+.banner-expanded ul,
+.banner-expanded ol {
+    padding-left: 1.5em;
+}
+
+.banner-expanded ul {
+    list-style: disc;
+}
+
+.banner-expanded ol {
+    list-style: decimal;
+}
+
+/* OS message banner dismiss (×): inline, grouped with the headline/caret
+   (not floated into the empty right side). Scoped so it only affects the
+   OS promo banner, which is the only banner carrying these classes. */
+/* Lay out the OS promo banner as a single centered row so the dismiss button,
+   headline, and expand caret line up vertically. Scoped to data-source="os"
+   so the other banners are untouched. */
+.announcement-banner[data-source="os"] {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+.announcement-banner[data-source="os"] .banner-expanded {
+    flex-basis: 100%;  /* expanded text drops to its own row */
+}
+
+.announcement-banner .os-message-dismiss-form {
+    display: inline-flex;
+    margin-right: 10px;
+}
+
+.announcement-banner .os-message-dismiss {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    background: transparent;
+    border: 1px solid rgba(0, 0, 0, 0.3);
+    border-radius: 3px;
+    color: inherit;
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1;
+    opacity: 0.7;
+}
+
+.announcement-banner .os-message-dismiss:hover,
+.announcement-banner .os-message-dismiss:focus {
+    opacity: 1;
+    background: rgba(0, 0, 0, 0.06);
+    outline: none;
+}
+
+/* Removed: custom-search-form media queries — old topbar search sizing */
+
+/* Removed: Old sidebar/layout media queries for #page-wrapper, #footer-wrapper,
+   .sidebar, #side-menu, body.min/max, li#minimize-menu-li — replaced by Alpine.js sidebar */
+
+#toTop {
+    position: fixed;
+    bottom: 95px;
+    right: 40px;
+    cursor: pointer;
+    display: none;
+    width: 40px;
+    height: 30px;
+}
+
+/* ---- Filter panel styling ---- */
+
+/* Filter panel container — clean, professional look */
+#the-filters,
+#the-filters-open,
+#the-filters-paused,
+#the-filters-closed,
+[id^="the-filters"] {
+    background-color: var(--color-surface-2, #fffaf4);
+    padding: 1.25rem 1.25rem 0.5rem;
+    border-top: 2px solid var(--color-dd-interactive-100, #d2e9ed);
+}
+
+/* Grid layout for filter fields */
+.dojo-filter-set.form-inline .filter-form-group {
+    display: grid;
+    grid-template-columns: repeat(12, minmax(0, 1fr));
+    gap: 0.75rem 1rem;
+    margin-bottom: 0;
+}
+
+/* Inline form-group fallback */
+.dojo-filter-set.form-inline .form-group {
+    display: inline-block;
+    margin-bottom: 0.75rem;
+    vertical-align: middle;
+    margin-right: 1rem;
+}
+
+/* Filter grid children: map col-* to grid-column spans */
+.filter-form-group > [class*="col-"] {
+    width: auto !important;
+    grid-column: span 12;
+}
+@media (min-width: 768px) {
+    .filter-form-group > .col-sm-6 { grid-column: span 6; }
+}
+@media (min-width: 992px) {
+    .filter-form-group > .col-md-4 { grid-column: span 4; }
+}
+@media (min-width: 1200px) {
+    .filter-form-group > .col-lg-3 { grid-column: span 3; }
+}
+
+/* Filter category grouping (Alpine-toggled accordion) */
+.filter-category {
+    flex: 0 0 100%;
+    border-bottom: 1px solid var(--color-border, #DCDCDC);
+}
+
+.filter-category:last-of-type {
+    border-bottom: none;
+}
+
+.filter-category-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    width: 100%;
+    padding: 0.5rem 0.25rem;
+    background: none;
+    border: none;
+    font: inherit;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    user-select: none;
+}
+
+.filter-category-title {
+    font-size: 0.6875rem;
+    font-weight: 700;
+    color: var(--color-dd-interactive-800, #004b5c);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+}
+
+.filter-category-chevron {
+    font-size: 0.625rem;
+    color: var(--color-text-muted, #666);
+    transition: transform 0.2s ease;
+}
+
+.filter-category-chevron.is-open {
+    transform: rotate(180deg);
+}
+
+/* Slide the whole category open/closed via the grid-rows trick so the header
+   stack moves together smoothly instead of snapping. Works in all browsers. */
+.filter-category-content {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 0.2s ease;
+}
+
+.filter-category-content.is-open {
+    grid-template-rows: 1fr;
+}
+
+.filter-category-content > .filter-category-clip {
+    overflow: hidden;
+    min-height: 0;
+}
+
+.filter-category-body {
+    padding-bottom: 0.75rem;
+}
+
+/* Filter labels — compact, readable */
+.dojo-filter-set .form-label,
+.dojo-filter-set label {
+    display: block;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--color-text, #191919);
+    margin-bottom: 0.25rem;
+    line-height: 1.3;
+}
+
+/* Filter inputs — clean, consistent heights */
+.dojo-filter-set .filter-form-control,
+.dojo-filter-set .form-control {
+    width: 100%;
+    height: 2.125rem;
+    min-height: 2.125rem;
+    font-size: 0.8125rem;
+    color: var(--color-text, #191919);
+    background-color: #fff;
+    border: 1px solid var(--color-border, #DCDCDC);
+    border-radius: 0.375rem;
+    padding: 0.25rem 0.5rem;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.dojo-filter-set .filter-form-control:focus,
+.dojo-filter-set .form-control:focus {
+    border-color: var(--color-dd-interactive-700, #005f73);
+    box-shadow: 0 0 0 3px rgba(0, 95, 115, 0.1);
+    outline: none;
+}
+
+.dojo-filter-set .filter-form-control::placeholder {
+    color: #adb5bd;
+    font-style: italic;
+}
+
+/* Filter input wrappers */
+.dojo-filter-set.form-inline .filter-form-input {
+    margin-right: 0;
+    margin-bottom: 0;
+    min-width: 0;
+}
+
+/* Multi-select — compact, styled options */
+.dojo-filter-set select[multiple],
+.dojo-filter-set select[multiple=multiple] {
+    width: 100%;
+    min-height: 2.125rem;
+    max-height: 5rem;
+    font-size: 0.8125rem;
+    border: 1px solid var(--color-border, #DCDCDC);
+    border-radius: 0.375rem;
+    padding: 0.125rem;
+    background-color: #fff;
+}
+
+.dojo-filter-set select[multiple] option {
+    padding: 0.2rem 0.5rem;
+    border-radius: 0.25rem;
+}
+
+.dojo-filter-set select[multiple] option:checked {
+    background-color: var(--color-dd-interactive-50, #ecf6f8);
+    color: var(--color-dd-interactive-800, #004b5c);
+}
+
+/* Select2 in filters — match design system */
+.dojo-filter-set .select2-container {
+    width: 100% !important;
+    min-width: 0;
+}
+
+.dojo-filter-set .select2-container--default .select2-selection--single,
+.dojo-filter-set .select2-container--default .select2-selection--multiple {
+    border: 1px solid var(--color-border, #DCDCDC);
+    border-radius: 0.375rem;
+    min-height: 2.125rem;
+    background-color: #fff;
+    font-size: 0.8125rem;
+}
+
+.dojo-filter-set .select2-container--default .select2-selection--single .select2-selection__rendered {
+    line-height: 2rem;
+    padding-left: 0.5rem;
+    color: var(--color-text, #191919);
+}
+
+.dojo-filter-set .select2-container--default .select2-selection--single .select2-selection__arrow {
+    height: 2rem;
+}
+
+.dojo-filter-set .select2-container--default .select2-selection--multiple .select2-selection__choice {
+    background-color: var(--color-dd-interactive-50, #ecf6f8);
+    border: 1px solid var(--color-dd-interactive-200, #a7d4dc);
+    border-radius: 0.25rem;
+    color: var(--color-dd-interactive-800, #004b5c);
+    font-size: 0.75rem;
+    padding: 0.0625rem 0.375rem;
+    margin: 0.125rem 0.25rem 0.125rem 0;
+}
+
+.dojo-filter-set .select2-container--default .select2-selection--multiple .select2-selection__choice__remove {
+    color: var(--color-dd-interactive-700, #005f73);
+    margin-right: 0.25rem;
+}
+
+.dojo-filter-set .select2-container--default.select2-container--focus .select2-selection--single,
+.dojo-filter-set .select2-container--default.select2-container--focus .select2-selection--multiple,
+.dojo-filter-set .select2-container--default.select2-container--open .select2-selection--single,
+.dojo-filter-set .select2-container--default.select2-container--open .select2-selection--multiple {
+    border-color: var(--color-dd-interactive-700, #005f73);
+    box-shadow: 0 0 0 3px rgba(0, 95, 115, 0.1);
+}
+
+/* Filter help icons */
+.dojo-filter-set .has-popover,
+.dojo-filter-set .fa-circle-question {
+    font-size: 0.625rem;
+    color: #999;
+    margin-left: 0.125rem;
+    cursor: help;
+}
+
+/* Filter action buttons area */
+.dojo-filter-set .d-flex.justify-content-end {
+    padding-top: 0.25rem;
+    padding-bottom: 0.5rem;
+}
+
+/* Report filter set */
+.report-filter-set {
+    padding-left: 0.75rem;
+}
+
+.report-filter-set .form-group {
+    display: inline-block;
+    margin-bottom: 0.75rem;
+    vertical-align: middle;
+    margin-right: 1rem;
+}
+
+/* Finding list density */
+.finding-list .panel-body, .finding-list table {
+    font-size: .95em;
+}
+
+.panel-default {
+    border: 1px solid var(--color-border);
+}
+
+/* One gap between every card: stacked cards in a column, and cards in
+   consecutive rows, sit 1rem apart. */
+.panel,
+.card,
+.stat-card {
+    margin-bottom: 1rem;
+}
+
+/* Stat cards in a row fill their column, so a card whose label wraps
+   does not leave the others short with uneven space beneath them. */
+.row > [class*="col-"]:has(> .stat-card) {
+    display: flex;
+    flex-direction: column;
+}
+
+.row > [class*="col-"] > .stat-card {
+    flex: 1 1 auto;
+    display: flex;
+    flex-direction: column;
+}
+
+.stat-card > .stat-card-link {
+    margin-top: auto;
+}
+
+/* The "Showing entries" / page size row around a list's table card:
+   centered on one line, with a gap before the card it introduces. */
+.clearfix:has(> .pagination) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.clearfix:has(> .pagination)::before,
+.clearfix:has(> .pagination)::after {
+    display: none;
+}
+
+.clearfix:has(> .pagination) {
+    margin-bottom: 0.75rem;
+}
+
+.clearfix > .pagination:not(nav .pagination) {
+    font-size: 0.875rem;
+    color: var(--color-text-muted);
+}
+
+.panel-heading h2,
+.panel-heading h3,
+.panel-heading h4,
+.panel-heading h5 {
+	margin-top: 0;
+	margin-bottom: 0;
+}
+
+/* Card heading icon: a fixed-width box one line tall, so the glyph sits
+   centered on the heading's text line and every heading's text starts at
+   the same offset. */
+.dd-card-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 1.25em;
+    height: 1lh;
+    vertical-align: top;
+    margin-inline-end: 0.5rem;
+    /* Font Awesome pins line-height to 1; take the heading's instead, so
+       1lh is the heading's line box and the glyph centers on its text. */
+    line-height: inherit;
+    color: var(--color-text-muted);
+}
+
+/* In a flex title row the row's gap already separates icon and title. */
+.has-filters > .dd-card-icon {
+    margin-inline-end: 0;
+}
+
+/* One heading size for every card title, whatever level the template used. */
+.panel-heading :is(h1, h2, h3, h4, h5) {
+    font-size: 1.0625rem;
+    font-weight: 700;
+    line-height: 1.5;
+}
+
+/* A card header holding a title and a button row: center the title against
+   the buttons and push the buttons to the trailing edge. */
+.panel-heading > .clearfix {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.panel-heading > .clearfix::before,
+.panel-heading > .clearfix::after {
+    display: none;
+}
+
+.panel-heading > .clearfix > .pull-right {
+    margin-inline-start: auto;
+}
+
+/* Buttons grouped on the trailing side of a card header sit an even
+   0.5rem apart, instead of whatever whitespace the template left. */
+.panel-heading .pull-right {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+/* A header that is bare text (no heading element) reads as a card title too. */
+.panel-default > .panel-heading:not(:has(h1, h2, h3, h4, h5, h6, .row, form)) {
+    font-size: 1.0625rem;
+    font-weight: 700;
+}
+
+/* Big-number tiles (icon, count, link): keep the icon apart from the count. */
+.panel-heading > .row > [class*="col-"]:has(> .fa-2x) {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.panel-heading > .row > [class*="col-"] > .fa-2x {
+    color: var(--color-text-muted);
+}
+
+/* A title that is not floated left fills the row, so its own trailing
+   controls can reach the edge. */
+.panel-heading > .clearfix > :is(h1, h2, h3, h4, h5):not(.pull-left) {
+    flex: 1 1 auto;
+}
+
+.panel-heading .btn {
+	padding-top: 0.25rem;
+	padding-bottom: 0.25rem;
+}
+
+.panel-default > .panel-comments {
+    color: black;
+    font-size: 12px;
+    padding: 10px 10px;
+    background-color: var(--color-surface-3);
+    border-color: var(--color-border);
+    border: 1px solid var(--color-border);
+}
+
+.panel-default > .panel-heading {
+    color: var(--color-text);
+    font-size: 0.875rem;
+    background-color: var(--color-surface-2);
+    border-color: var(--color-border);
+}
+
+.panel-default > .panel-heading a:not(.btn),
+.panel-default > .panel-heading small{
+	color: var(--color-dd-interactive-700);
+}
+
+.panel-default > .panel-heading a:not(.btn) {
+	text-decoration: none;
+}
+
+.panel-default > .panel-heading a:not(.btn):hover{
+	color: var(--color-dd-interactive-800);
+	text-decoration: underline;
+}
+
+.panel-default-secondary{
+	border: 1px solid var(--color-border);
+	border-top-style: none;
+}
+
+.panel-default-secondary > .panel-heading {
+  color: var(--color-text);
+  background-color: var(--color-surface-3);
+	border-style: solid;
+	border-color: var(--color-border);
+}
+
+.panel-heading .text-muted {
+    color: #4b4b4b;
+}
+
+.panel-body.product-graphs {
+	padding-left: 0;
+	padding-right: 0;
+	background-color: #f8f9f8;
+}
+
+.product-graphs .panel-body {
+	border-right: 1px solid #dcdedf;
+	border-left: 1px solid #dcdedf;
+}
+
+.graph {
+    min-height: 158px;
+}
+
+.graph-loader {
+    min-height: 158px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+}
+
+.panel-footer {
+    background-color: var(--color-surface-2);
+    border-top: 1px solid var(--color-border);
+    border-bottom-right-radius: 0;
+    border-bottom-left-radius: 0;
+}
+
+.panel-footer small{
+	color: var(--color-dd-interactive-700);
+}
+
+/* dt-buttons / dt-search overrides removed — now in datatables-dd.css */
+
+table#product_types .btn-success{
+	background-color: var(--color-dd-primary-700);
+	border-color: var(--color-dd-primary-700);
+	color: var(--color-dd-on-primary);
+}
+
+table#product_types .btn-success:hover{
+	background-color: var(--color-dd-primary-800);
+	border-color: var(--color-dd-primary-800);
+}
+
+table#product_types .btn-warning{
+	background-color: #149b7e;
+	border-color: #149b7e;
+}
+
+table#product_types .btn-warning:hover{
+	background-color: #11876e;
+	border-color: #11876e;
+}
+
+/* Removed: glyphicon-chevron-* — using Font Awesome now */
+
+.finding-description {
+    max-height: 500px;
+    overflow-y: scroll;
+}
+
+.finding-description::-webkit-scrollbar {
+    -webkit-appearance: none;
+}
+
+.finding-description::-webkit-scrollbar:vertical {
+    width: 13px;
+}
+
+.finding-description::-webkit-scrollbar-thumb {
+    border-radius: 8px;
+    border: 2px solid white; /* should match background, can't be transparent */
+    background-color: rgba(0, 0, 0, .5);
+}
+
+.finding-description::-webkit-scrollbar-track {
+    background-color: #fff;
+    border-radius: 8px;
+}
+
+/* Removed: .highlight — jquery-highlight plugin removed */
+
+
+.benchmark_pass {
+  background-color: #dff0d8;
+}
+.benchmark_fail {
+  background-color: #f2dede;
+}
+.benchmark_disabled {
+  background-color: #eaedf2
+}
+
+form#quick-add-form {
+    display: inline-block;
+    width: 40%;
+}
+
+.dojo-filter-heading {
+    background-color: var(--color-surface-2);
+    margin: 0px;
+    padding: 5px 10px;
+    border-radius: 0px;
+    border: 1px solid var(--color-border);
+    margin-left: -16px;
+    margin-right: -16px;
+    margin-top: -16px;
+    font-size: 15px;
+    margin-bottom: 15px;
+}
+
+.dojo-report-heading {
+    margin-top: 15px;
+    margin-left: -16px;
+    margin-right: -16px;
+    background-color: var(--color-surface-2);
+    border-radius: 0px;
+    border: 1px solid var(--color-border);
+    font-size: 15px;
+    padding: 5px 10px;
+    margin-bottom: 15px;
+}
+
+div.potential-finding, div.potential-finding div.panel-heading {
+    border-top-right-radius: 0px;
+    border-top-left-radius: 0px;
+}
+
+a.template-popover:hover {
+    cursor: url(../img/zoom-in.cur), zoom-in;
+}
+
+.popover{
+    max-width: 500px;
+}
+
+#template_findings div.popover {
+    width: 50%;
+    max-width: 50%;
+}
+
+#template_findings div.popover .popover-content {
+    overflow: hidden;
+}
+
+.panel-available-widget {
+    border-color: #ddd;
+}
+
+/* The Page Break widget's title is a block in the report; keep it on the
+   icon's line in the builder. */
+.panel-available-widget .panel-heading .report-page-break {
+    display: inline;
+}
+
+.panel-available-widget .panel-heading {
+    background-color: #f5f5f5;
+    border-color: #ddd;
+}
+
+.panel-available-widget .form-group * {
+
+}
+
+.panel-available-widget .form-control {
+    width: 100%;
+    height: auto;
+}
+
+.panel-available-widget .panel-heading h5 {
+    margin: 0;
+}
+
+.panel-available-widget .panel-heading hr {
+    margin: 7px 0;
+}
+
+.available-widgets .panel-available-widget .panel-body {
+    display: none;
+}
+
+ul#sortable1, ul#sortable2 {
+    padding: 10px 0 0;
+    list-style-type: none;
+}
+
+ul#sortable1 li div.panel-heading:hover, ul#sortable2 li div.panel-heading:hover {
+    cursor: default;
+}
+
+.available-widgets .ui-state-highlight, .in-use-widgets .ui-state-highlight {
+    height: 35px;
+    line-height: 1.2em;
+    border: 2px dotted #d0d0d0;
+    margin-top: 3px;
+    margin-bottom: 20px;
+}
+
+.available-widgets .ui-state-highlight:first-child, .in-use-widgets .ui-state-highlight:first-child {
+    margin-top: 0px;
+    margin-bottom: 10px;
+}
+
+.report-page-break {
+    display: flex;
+    align-items: center;
+    text-align: center;
+}
+
+.report-page-break::before,
+.report-page-break::after {
+    content: '';
+    flex: 1;
+    border-bottom: 1px dashed #000;
+}
+
+.report-page-break:not(:empty)::before {
+    margin-right: 0.25em;
+}
+
+.report-page-break:not(:empty)::after {
+    margin-left: 0.25em;
+}
+
+.editor * {
+    font-size: 1em;
+}
+
+.editor ul {
+    list-style-type: disc;
+    padding: 0 40px;
+}
+
+.editor {
+    overflow: scroll;
+    min-height: 250px;
+}
+
+.in-use-widgets .report-filter-set .btn-sm {
+    padding: 2px 10px;
+}
+
+.btn-tag {
+    background: #3498db;
+    border-radius: 3px;
+    border-color: #ddd;
+    color: #ffffff;
+    font-size: 90%;
+    padding: 2px 5px 2px 5px;
+    text-decoration: none;
+}
+
+.btn-grade {
+    border-radius: 2px;
+    border-color: #ddd;
+    color: #ffffff;
+    padding: 1px 1px 1px 1px;
+    text-decoration: none;
+}
+
+.tag-all {
+    background: #3498db;
+    text-decoration: none;
+}
+
+
+.A {
+    background: #4ec83d;
+}
+.B {
+  background: #ffa100;
+}
+.C {
+  background: #FFBD33;
+}
+.D {
+  background: #cc3300;
+}
+.F {
+  background: #ef251e;
+}
+
+.white-color {
+  color: #FFFFFF;
+}
+
+div.tags .label {
+    font-size: 90;
+    display: inline-block;
+    padding: .6em .3em;
+}
+
+.tag-label {
+    display: inline;
+    padding: .2em .6em .3em;
+    font-size: 11px;
+    color: #fff;
+    border-radius: .25em;
+    text-decoration: none;
+    text-decoration-style: solid;
+}
+
+.tag-color {
+    background: #556270;
+    border: 1px solid #fff;
+}
+
+.tag-version {
+    background: var(--color-dd-interactive-700);
+    border: 1px solid #fff;
+}
+
+.happy-green-color {
+    color: green;
+}
+
+.warning-color {
+    background: red;
+}
+
+.amber-color {
+  background: #ffc107;
+}
+
+.amber-color-with-padding {
+  background: #ffc107;
+  padding: .2em .6em .3em;
+}
+
+.tag-label:link {
+    color: white;
+    text-decoration: none;
+}
+
+.tag-label:hover {
+    color: white;
+    text-decoration: none;
+}
+
+.tag-label:active {
+    color: white;
+    text-decoration: none;
+}
+
+/* Item tags (findings, tests, engagements ...): grey outlined chips. */
+.tag-label.tag-color,
+.tag-label.tag-color:link,
+.tag-label.tag-color:visited {
+    display: inline-block;
+    background: transparent;
+    border: 1px solid var(--color-gray-300);
+    color: var(--color-text-muted);
+    font-weight: 500;
+    line-height: 1.4;
+    border-radius: 9999px;
+    padding: 0 0.5em;
+    margin: 0 0.125rem 0.125rem 0;
+}
+
+.tag-label.tag-color:hover,
+.tag-label.tag-color:focus {
+    border-color: var(--color-dd-interactive-700);
+    color: var(--color-dd-interactive-700);
+}
+
+.tag-label:visited {
+    color: white;
+    text-decoration: none;
+}
+
+#finding_pic, .modal_finding_pic:hover {
+    cursor: url(../img/zoom-in.cur), zoom-in;
+}
+
+.product-detailed-info ol.product-detailed-info-numbers li {
+    display: table-cell;
+    width: 1%;
+    padding: 5px 5px;
+    text-align: center;
+    white-space: nowrap;
+    border-bottom: 0;
+    border-bottom-width: 0px;
+    border-bottom-style: initial;
+    border-bottom-color: initial;
+}
+.product-detailed-info ol.product-detailed-info-numbers li .language-color {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+}
+mark{
+    background: orange;
+    color: black;
+}
+
+.btn-overdue {
+    border-radius: 0px;
+    border-color: #ddd;
+    color: #ffffff;
+    background: #ef251e;
+    padding: 2px 2px 2px 2px;
+    font-size: 90%;
+}
+
+/* Severity counter blocks: the tag tint and ink, with a bar in the base
+   severity color along the top. */
+.bg-vuln-critical {
+  background-color: var(--color-severity-critical-bg);
+  color: var(--color-severity-critical-text);
+  border-top: 3px solid var(--color-severity-critical);
+}
+.bg-vuln-high {
+  background-color: var(--color-severity-high-bg);
+  color: var(--color-severity-high-text);
+  border-top: 3px solid var(--color-severity-high);
+}
+.bg-vuln-medium {
+  background-color: var(--color-severity-medium-bg);
+  color: var(--color-severity-medium-text);
+  border-top: 3px solid var(--color-severity-medium);
+}
+.bg-vuln-low {
+  background-color: var(--color-severity-low-bg);
+  color: var(--color-severity-low-text);
+  border-top: 3px solid var(--color-severity-low);
+}
+.bg-vuln-info {
+  background-color: var(--color-severity-info-bg);
+  color: var(--color-severity-info-text);
+  border-top: 3px solid var(--color-severity-info);
+}
+.bg-muted {
+  background-color: #3d5155;
+  color: #fff8f0;
+}
+.vuln-count {
+  font-size:18px;
+  font-weight: 700;
+}
+.vuln-count small,
+.vuln-count .small {
+  /* Tailwind's base layer makes <small> use --color-text-muted (gray);
+     inside the severity counter boxes the label takes the block's ink to
+     match the count number above it. */
+  color: inherit;
+}
+.metrics-severity-counts {
+  table-layout: fixed;
+  width: 100%;
+}
+small {
+  font-size:12px;
+  font-weight:400;
+}
+
+.fa-minus-square, .fa-trash {
+    color: red;
+}
+
+.fa-plus-square, .fa-exchange, .fa-share-square {
+    color: green;
+}
+
+.fa-asterisk {
+    color: blue;
+}
+
+#jira i:hover {
+    cursor: pointer;
+}
+
+.no-bottom-margin {
+    margin-bottom: 0px;
+}
+
+.lightgrey {
+    color:lightgrey;
+}
+
+.red {
+    color:red;
+}
+
+.no-italics {
+    font-style: normal;
+}
+
+/* ---- Select2 global styling ---- */
+.select2-container {
+    min-width: min(200px, 100%);
+}
+
+.select2-dropdown {
+    border: 1px solid var(--color-border, #DCDCDC);
+    border-radius: 0.375rem;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+    overflow: hidden;
+}
+
+.select2-results__option {
+    font-size: 0.8125rem;
+    padding: 0.375rem 0.5rem;
+}
+
+.select2-results__option--highlighted[aria-selected] {
+    background-color: var(--color-dd-interactive-50, #ecf6f8) !important;
+    color: var(--color-dd-interactive-800, #004b5c) !important;
+}
+
+.select2-results__option[aria-selected="true"] {
+    background-color: var(--color-dd-interactive-100, #d2e9ed);
+    color: var(--color-dd-interactive-900, #003947);
+}
+
+.select2-search--dropdown .select2-search__field {
+    border: 1px solid var(--color-border, #DCDCDC);
+    border-radius: 0.375rem;
+    padding: 0.375rem 0.5rem;
+    font-size: 0.8125rem;
+    outline: none;
+}
+
+.select2-search--dropdown .select2-search__field:focus {
+    border-color: var(--color-dd-interactive-700, #005f73);
+    box-shadow: 0 0 0 2px rgba(0, 95, 115, 0.1);
+}
+
+/* Show Password toggle — inline, not absolutely positioned */
+#toggleBox {
+    background-color: transparent !important;
+    border: none !important;
+    font-weight: 500 !important;
+    padding: 0 !important;
+    font-size: 0.8125rem;
+    color: var(--color-dd-interactive-700, #005f73);
+    cursor: pointer;
+}
+#toggleBox:hover {
+    color: var(--color-dd-interactive-800, #004b5c);
+    text-decoration: underline;
+}
+
+.EasyMDEContainer .table {
+    width: unset!important;
+}
+
+/* Form widget widths — keep EasyMDE markdown editor, Select2 (incl. tag inputs)
+   and the legacy Chosen widget the same width as plain .form-control inputs
+   inside .form-group cells (col-sm-10). !important on .select2-container is
+   needed because Tagulous sets style="width:70%" inline. */
+.form-group .EasyMDEContainer,
+.form-group .CodeMirror,
+.form-group .editor-toolbar,
+.form-group .editor-statusbar,
+.form-group .editor-preview-side,
+.form-group .chosen-container,
+.form-group .select2-container {
+    width: 100% !important;
+}
+
+/* remove spinners (up & down arrow) for integer / number fields
+/* For Firefox */
+
+input[type='number'] {
+    -moz-appearance:textfield;
+}
+
+/* Webkit browsers like Safari and Chrome */
+
+input[type=number]::-webkit-inner-spin-button,
+input[type=number]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+/* Removed: .table cell border-right — Tailwind uses bottom borders only */
+
+/* Removed: .legend / .legendLabel — Flot chart library removed */
+    
+.fa-caret-down,
+.caret {
+        forced-color-adjust: none;
+}    
+    
+/* Keep arrows icons in forced color mode  */
+@media (forced-colors: active) {
+    .fa-caret-down,
+    .caret {
+        color: ButtonText;
+    }
+ }
+
+/* Disabled form-field styling — @tailwindcss/forms resets the browser default
+   disabled appearance for <select>/<input>/<textarea> without replacing it,
+   so server-side `disabled=True` fields end up looking editable. */
+select:disabled,
+input:disabled,
+textarea:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    background-color: #f5f5f5;
+}

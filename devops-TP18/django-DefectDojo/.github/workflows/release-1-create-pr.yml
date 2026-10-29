@@ -1,0 +1,119 @@
+name: "Release-1: Create PR for master"
+
+env:
+  GIT_USERNAME: "DefectDojo release bot"
+  GIT_EMAIL: "dojo-release-bot@users.noreply.github.com"
+on:
+  workflow_dispatch:
+    inputs:
+      # Every release (weekly patch and monthly minor) is cut from dev. The input is kept
+      # so existing callers that pass `-f from_branch=dev` keep working.
+      from_branch:
+        description: "Branch to release from. All releases, weekly patches and monthly minors, come from dev."
+        required: true
+        type: choice
+        default: 'dev'
+        options:
+          - dev
+      release_number:
+        description: "Release version (x.y.z format)"
+        required: true
+
+jobs:
+  create_pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate release_number format
+        run: |
+          # Expect x.y.z with a 1-3 digit last octet: x.y.0 for a monthly minor,
+          # x.y.100 / x.y.200 / ... for a weekly patch
+          echo "${{ inputs.release_number }}" | grep -E '^[0-9]+\.[0-9]+\.[0-9]{1,3}$'
+
+      - id: Set-GitHub-org
+        run: echo "GITHUB_ORG=${GITHUB_REPOSITORY%%/*}" >> $GITHUB_ENV
+
+      - name: Checkout from_branch branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.from_branch }}
+
+      - name: Create release branch
+        run: |
+          echo "NEW_BRANCH=release/merge-dev-into-master-${{ inputs.release_number }}" >> $GITHUB_ENV
+
+      - name: Configure git
+        run: |
+          git config --global user.name "${{ env.GIT_USERNAME }}"
+          git config --global user.email "${{ env.GIT_EMAIL }}"
+
+      - name: Push branch
+        run: git push origin HEAD:${NEW_BRANCH}
+
+      - name: Checkout release branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.NEW_BRANCH }}
+
+      - name: Update version numbers in key files
+        run: |
+          sed -ri 's/__version__ = ".*"/__version__ = "${{ inputs.release_number }}"/' dojo/__init__.py
+          sed -ri 's/"version": ".*"/"version": "${{ inputs.release_number }}"/' components/package.json
+          sed -ri 's/appVersion: ".*"/appVersion: "${{ inputs.release_number }}"/' helm/defectdojo/Chart.yaml
+
+          if grep "\-dev" helm/defectdojo/Chart.yaml; then
+              echo "x.y.z-dev found in Chart.yaml (the normal case for a release from dev)"
+              echo "removing the -dev suffix"
+              sed -e "s/\-dev//" -i helm/defectdojo/Chart.yaml
+          else
+              echo "x.y.z without -dev found in Chart.yaml: the chart was already stripped, probably a manual re-release"
+              CURRENT_CHART_VERSION=$(grep -oP 'version: (\K\S*)?' helm/defectdojo/Chart.yaml | head -1)
+              NEW_CHART_VERSION=$(echo "version: $CURRENT_CHART_VERSION" | awk -F. -v OFS=. 'NF==1{print ++$NF}; NF>1{$NF=sprintf("%0*d", length($NF), ($NF+1)); print}')
+              echo "bumping the chart version from $CURRENT_CHART_VERSION to $NEW_CHART_VERSION"
+              sed -ri "0,/version/s/version: \S+/$NEW_CHART_VERSION/" helm/defectdojo/Chart.yaml
+          fi
+
+      - name: Update values in HELM chart
+        run: |
+          yq -i '.annotations."artifacthub.io/prerelease" = "false"' helm/defectdojo/Chart.yaml
+          yq -i '.annotations."artifacthub.io/changes" += "- kind: changed\n  description: Bump DefectDojo to ${{ inputs.release_number }}\n"' helm/defectdojo/Chart.yaml
+
+      - name: Check version numbers
+        run: |
+          grep -H version dojo/__init__.py
+          grep -H version components/package.json
+          grep -H appVersion helm/defectdojo/Chart.yaml
+          grep -H version helm/defectdojo/Chart.yaml
+
+      - name: Run helm-docs
+        uses: losisin/helm-docs-github-action@9e0787c426fdec38be6288bb5c0559dcb388412c # v2
+        with:
+          chart-search-root: "helm/defectdojo"
+
+      - name: Push version changes
+        uses: stefanzweifel/git-auto-commit-action@4a55954c782fc1ea30b9056cd3e7a2b40ca8887d # v7.2.0
+        with:
+          commit_user_name: "${{ env.GIT_USERNAME }}"
+          commit_user_email: "${{ env.GIT_EMAIL }}"
+          commit_author: "${{ env.GIT_USERNAME }} <${{ env.GIT_EMAIL }}>"
+          commit_message: "Update versions in application files"
+          branch: ${{ env.NEW_BRANCH }}
+
+      - name: Create Pull Request
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const pr = await github.rest.pulls.create({
+              owner: '${{ env.GITHUB_ORG }}',
+              repo: 'django-DefectDojo',
+              title: 'Release: Merge release into master from: ${{ env.NEW_BRANCH }}',
+              body: `Release triggered by \`${ process.env.GITHUB_ACTOR }\``,
+              head: '${{ env.NEW_BRANCH }}',
+              base: 'master'
+            })
+            await github.rest.issues.addLabels({
+              owner: '${{ env.GITHUB_ORG }}',
+              repo: 'django-DefectDojo',
+              issue_number: pr.data.number,
+              labels: ['release-management']
+            })

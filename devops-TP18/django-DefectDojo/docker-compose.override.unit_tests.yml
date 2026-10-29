@@ -1,0 +1,64 @@
+---
+services:
+  nginx: !reset
+  uwsgi:
+    build:
+      target: django-unittests
+    entrypoint: ['/wait-for-it.sh', '${DD_DATABASE_HOST:-postgres}:${DD_DATABASE_PORT:-5432}', '-t', '30', '--', '/app/docker/entrypoint-unit-tests-devDocker.sh']
+    volumes:
+      - '.:/app:z'
+      - "defectdojo_media_unit_tests:${DD_MEDIA_ROOT:-/app/media}"
+    depends_on: !override
+      postgres:
+        condition: service_started
+    environment:
+      PYTHONWARNINGS: error  # We are strict about Warnings during testing
+      DD_DEBUG: 'True'
+      DD_TEST_DATABASE_NAME: ${DD_TEST_DATABASE_NAME:-test_defectdojo}
+      DD_DATABASE_NAME: ${DD_TEST_DATABASE_NAME:-test_defectdojo}
+      DD_DATABASE_ENGINE: ${DD_DATABASE_ENGINE:-django.db.backends.postgresql}
+      DD_DATABASE_HOST: ${DD_DATABASE_HOST:-postgres}
+      DD_DATABASE_PORT: ${DD_DATABASE_PORT:-5432}
+      DD_DATABASE_USER: ${DD_DATABASE_USER:-defectdojo}
+      DD_DATABASE_PASSWORD: ${DD_DATABASE_PASSWORD:-defectdojo}
+      # In-memory broker, the same as docker-compose.override.unit_tests_cicd.yml. The
+      # sqla+sqlite transport goes through kombu's SQLAlchemy models, and under
+      # PYTHONWARNINGS=error SQLAlchemy 2.1's deprecation of the `noload` loader they
+      # use fails the first task dispatch in any test. settings.dist.py only builds
+      # the URL from the scheme and path when DD_CELERY_BROKER_URL is empty, and these
+      # two produce exactly "memory://".
+      DD_CELERY_BROKER_URL: ''
+      DD_CELERY_BROKER_SCHEME: 'memory'
+      DD_CELERY_BROKER_PATH: ''
+      # No Redis/valkey in unit tests -> default django cache is LocMemCache.
+      DD_CACHE_URL: ''
+      # Product grading is debounced through a cache marker with a wall-clock window
+      # (dojo.utils.schedule_product_grade). Under the test runner a dispatched grade task
+      # may never run, so a marker would outlive its test and silently skip grading for the
+      # next test whose product gets the same id, and it makes query counts depend on
+      # timing. 0 queues a task per change, as before; the debounce's own unit tests turn
+      # the window on explicitly.
+      DD_PRODUCT_GRADE_DEBOUNCE_SECONDS: '0'
+      # In-process singleton cache (dojo/caching.py) stays ON for deterministic
+      # assertNumQueries counts; reset per request (middleware) and per test.
+      DD_SETTINGS_CACHE_L1_TTL: '30'
+      DD_JIRA_EXTRA_ISSUE_TYPES: 'Vulnerability' # Shouldn't trigger a migration error
+  celerybeat: !reset
+  celeryworker: !reset
+  initializer: !reset
+  postgres:
+    ports:
+      - target: ${DD_DATABASE_PORT:-5432}
+        published: ${DD_DATABASE_PORT:-5432}
+        protocol: tcp
+        mode: host
+    environment:
+      POSTGRES_DB: ${DD_TEST_DATABASE_NAME:-test_defectdojo}
+    volumes:
+      - defectdojo_postgres_unit_tests:/var/lib/postgresql/data
+  valkey: !reset
+  "webhook.endpoint":
+    image: mccutchen/go-httpbin:2.18.3@sha256:3992f3763e9ce5a4307eae0a869a78b4df3931dc8feba74ab823dd2444af6a6b
+volumes:
+  defectdojo_postgres_unit_tests: {}
+  defectdojo_media_unit_tests: {}

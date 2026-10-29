@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tp12c-backend
+  namespace: devops-portfolio
+  labels:
+    app: tp12c-backend
+    component: tp12c
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tp12c-backend
+  template:
+    metadata:
+      labels:
+        app: tp12c-backend
+        component: tp12c
+    spec:
+      containers:
+        - name: tp12c-backend
+          image: tp12c-notes-app:1.0
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 5000
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 5000
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tp12c-backend-service
+  namespace: devops-portfolio
+  labels:
+    app: tp12c-backend
+    component: tp12c
+spec:
+  selector:
+    app: tp12c-backend
+  ports:
+    - name: http
+      port: 5000
+      targetPort: 5000
+      protocol: TCP

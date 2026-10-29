@@ -1,0 +1,14 @@
+{
+  "@version": "2.14.0",
+  "site": [{
+    "@name": "http://localhost:8080",
+    "alerts": [{
+      "pluginid": "10021",
+      "alert": "X-Content-Type-Options Header Missing",
+      "riskcode": "1",
+      "confidence": "2",
+      "riskdesc": "Low (Medium)",
+      "desc": "Header missing"
+    }]
+  }]
+}

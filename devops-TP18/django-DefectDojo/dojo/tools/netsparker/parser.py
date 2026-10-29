@@ -1,0 +1,132 @@
+import datetime
+import json
+
+import html2text
+from cvss import parser as cvss_parser
+from dateutil import parser as date_parser
+from django.conf import settings
+
+from dojo.location.feature import locations_enabled
+from dojo.models import Endpoint, Finding
+from dojo.tools.locations import LocationData
+
+
+def _parse_date(date_str):
+    """Parse a Netsparker/Invicti date string into a date object."""
+    if not date_str:
+        return None
+    try:
+        if "UTC" in date_str:
+            return datetime.datetime.strptime(
+                date_str.split(" ")[0], "%d/%m/%Y",
+            ).date()
+        return datetime.datetime.strptime(
+            date_str, "%d/%m/%Y %H:%M %p",
+        ).date()
+    except ValueError:
+        try:
+            return date_parser.parse(date_str).date()
+        except (ValueError, date_parser.ParserError):
+            return None
+
+
+class NetsparkerParser:
+    def get_scan_types(self):
+        return ["Netsparker Scan"]
+
+    def get_label_for_scan_types(self, scan_type):
+        return "Netsparker Scan"
+
+    def get_description_for_scan_types(self, scan_type):
+        return "Netsparker JSON format."
+
+    def get_findings(self, filename, test):
+        tree = filename.read()
+        try:
+            data = json.loads(str(tree, "utf-8-sig"))
+        except Exception:
+            data = json.loads(tree)
+        dupes = {}
+        scan_date = _parse_date(data.get("Generated"))
+
+        for item in data["Vulnerabilities"]:
+            title = item["Name"]
+            findingdetail = html2text.html2text(item.get("Description", ""))
+            unsaved_cwes = []
+            if item["Classification"].get("Cwe"):
+                try:
+                    cwe = int(item["Classification"]["Cwe"].split(",")[0])
+                except Exception:
+                    cwe = None
+                unsaved_cwes = [value.strip() for value in item["Classification"]["Cwe"].split(",") if value.strip()]
+            else:
+                cwe = None
+            sev = item["Severity"]
+            if sev not in {"Info", "Low", "Medium", "High", "Critical"}:
+                sev = "Info"
+            mitigation = html2text.html2text(item.get("RemedialProcedure", ""))
+            references = html2text.html2text(item.get("RemedyReferences", ""))
+            url = item["Url"]
+            impact = html2text.html2text(item.get("Impact", ""))
+            dupe_key = title
+            request = item["HttpRequest"].get("Content", None)
+            response = item["HttpResponse"].get("Content", None)
+            finding_date = (_parse_date(item.get("FirstSeenDate")) or scan_date) if settings.USE_FIRST_SEEN else scan_date
+
+            finding = Finding(
+                title=title,
+                test=test,
+                description=findingdetail,
+                severity=sev.title(),
+                mitigation=mitigation,
+                impact=impact,
+                date=finding_date,
+                references=references,
+                cwe=cwe,
+                static_finding=True,
+            )
+            if unsaved_cwes:
+                finding.unsaved_cwes = unsaved_cwes
+            state = item.get("State", None)
+            if state == "FalsePositive":
+                finding.active = False
+                finding.verified = False
+                finding.false_p = True
+                finding.mitigated = None
+                finding.is_mitigated = False
+            elif state == "AcceptedRisk":
+                finding.risk_accepted = True
+
+            if item["Classification"] is not None:
+                if item["Classification"].get("Cvss") is not None and item["Classification"].get("Cvss").get("Vector") is not None:
+                    cvss_objects = cvss_parser.parse_cvss_from_text(
+                        item["Classification"]["Cvss"]["Vector"],
+                    )
+                    if len(cvss_objects) > 0:
+                        finding.cvssv3 = cvss_objects[0].clean_vector()
+                elif item["Classification"].get("Cvss31") is not None and item["Classification"].get("Cvss31").get("Vector") is not None:
+                    cvss_objects = cvss_parser.parse_cvss_from_text(
+                        item["Classification"]["Cvss31"]["Vector"],
+                    )
+                    if len(cvss_objects) > 0:
+                        finding.cvssv3 = cvss_objects[0].clean_vector()
+            finding.unsaved_req_resp = [{"req": str(request), "resp": str(response)}]
+            # manage endpoint/location
+            if locations_enabled():
+                finding.unsaved_locations = [LocationData.url(url=url)]
+            else:
+                # TODO: Delete this after the move to Locations
+                finding.unsaved_endpoints = [Endpoint.from_uri(url)]
+
+            if dupe_key in dupes:
+                find = dupes[dupe_key]
+                find.unsaved_req_resp.extend(finding.unsaved_req_resp)
+                if locations_enabled():
+                    find.unsaved_locations.extend(finding.unsaved_locations)
+                else:
+                    # TODO: Delete this after the move to Locations
+                    find.unsaved_endpoints.extend(finding.unsaved_endpoints)
+            else:
+                dupes[dupe_key] = finding
+
+        return list(dupes.values())

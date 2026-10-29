@@ -1,0 +1,1230 @@
+import contextlib
+import datetime
+import logging
+import time
+from collections import defaultdict
+from itertools import islice
+
+from django.conf import settings
+from django.core.management.base import BaseCommand
+from django.db import connection, transaction
+from django.db.models import Case, Exists, OuterRef, Prefetch, Value, When
+from django.utils import timezone
+
+from dojo.location.models import Location, LocationFindingReference, LocationProductReference
+from dojo.location.status import FindingLocationStatus, ProductLocationStatus
+from dojo.models import DojoMeta, Endpoint, Endpoint_Status, Engagement, Finding, Product, Test
+from dojo.tags.utils import bulk_add_tag_mapping
+from dojo.url.models import URL
+
+logger = logging.getLogger(__name__)
+
+# Endpoints read per DB iterator chunk, and rows per bulk write. Tunable via
+# --batch-size.
+DEFAULT_BATCH_SIZE = 1000
+# Minimum endpoints between progress lines. Tunable via --progress-every.
+DEFAULT_PROGRESS_EVERY = 50
+
+
+# `LocationFindingReference.created` is `auto_now_add=True` (inherited from
+# BaseModel). The original migration sets `created` to the source
+# Endpoint_Status.date in a post-save UPDATE so that auto_now_add is
+# bypassed. With bulk_create we don't get a post-save UPDATE; Django's
+# SQLInsertCompiler.pre_save_val still calls Field.pre_save(add=True),
+# which auto_now_add overrides with `now()`, ignoring our explicit value.
+# The cleanest single-process fix is to temporarily flip auto_now_add off
+# around the bulk write.
+@contextlib.contextmanager
+def _suspend_auto_now_add(model, field_name: str):
+    field = model._meta.get_field(field_name)
+    saved = field.auto_now_add
+    field.auto_now_add = False
+    try:
+        yield
+    finally:
+        field.auto_now_add = saved
+
+
+class _ChunkRows:
+
+    """
+    Rows accumulated for one chunk, deduplicated on their unique constraint.
+
+    The migration builds every row for a chunk in memory and then issues one
+    write per kind. Deduplicating here is what makes those writes safe: several
+    legacy Endpoints can normalize onto a single Location, and Postgres rejects
+    an ``ON CONFLICT DO UPDATE`` statement that would touch the same row twice.
+
+    Each row is paired with the id of the endpoint that produced it so a failed
+    batch write can be retried per row and attributed to the right endpoint.
+    """
+
+    def __init__(self) -> None:
+        self.meta: list[DojoMeta] = []
+        self.meta_endpoint_ids: list[int | None] = []
+        self._seen_meta: set[tuple[int, int | None, str]] = set()
+
+        # Finding references are written one status slice at a time (see
+        # `Command._migrate_statuses`) and drained after each write, so these
+        # lists hold at most one slice.
+        self.finding_refs: list[LocationFindingReference] = []
+        self.finding_ref_endpoint_ids: list[int | None] = []
+        # (location, finding) keys already queued in this chunk. Two statuses can
+        # only collide on that key when two endpoints of the chunk resolve to the
+        # same Location (Endpoint_Status is unique on (endpoint, finding)), so
+        # only keys of those shared locations are remembered. Remembering every
+        # key would grow with the statuses per chunk again.
+        self.shared_location_ids: set[int] = set()
+        self._seen_finding_refs: set[tuple[int, int]] = set()
+
+        # (location_id, product_id) -> (status, product, location, endpoint_id)
+        self._product_refs: dict[tuple[int, int], tuple[str, Product, Location, int | None]] = {}
+
+        # (product, location) pairs contributed by this chunk, for the per-chunk
+        # tag inheritance pass. Held per chunk — not for the whole run — so
+        # memory stays bounded by --batch-size no matter how large the install
+        # is (retaining every migrated Location object for a single end-of-run
+        # pass is what made multi-million-endpoint runs balloon).
+        self.inheritance_by_product: dict[int, set[int]] = defaultdict(set)
+        self.product_by_id: dict[int, Product] = {}
+        self.location_by_id: dict[int, Location] = {}
+
+    def track_product_location(self, product: Product, location: Location) -> None:
+        """Record a (product, location) pair for this chunk's tag inheritance pass."""
+        if product is None or product.id is None:
+            return
+        if location is None or location.id is None:
+            return
+        self.inheritance_by_product[product.id].add(location.id)
+        self.product_by_id.setdefault(product.id, product)
+        self.location_by_id.setdefault(location.id, location)
+
+    def add_meta(
+        self,
+        meta: DojoMeta,
+        location: Location,
+        product: Product | None,
+        endpoint_id: int | None,
+    ) -> None:
+        """Queue a DojoMeta copy, keyed on its unique_together (location, location_product, name)."""
+        product_id = getattr(product, "id", None)
+        key = (location.id, product_id, meta.name)
+        if key in self._seen_meta:
+            return
+        self._seen_meta.add(key)
+        self.meta.append(
+            DojoMeta(name=meta.name, value=meta.value, location=location, location_product=product),
+        )
+        self.meta_endpoint_ids.append(endpoint_id)
+
+    def add_finding_ref(self, reference: LocationFindingReference, endpoint_id: int | None) -> None:
+        """Queue a finding reference, keyed on its unique (location, finding)."""
+        if reference.location.id in self.shared_location_ids:
+            key = (reference.location.id, reference.finding_id)
+            if key in self._seen_finding_refs:
+                return
+            self._seen_finding_refs.add(key)
+        self.finding_refs.append(reference)
+        self.finding_ref_endpoint_ids.append(endpoint_id)
+
+    def drain_finding_refs(self) -> tuple[list[LocationFindingReference], list[int | None]]:
+        """Hand over the queued finding references and start an empty queue."""
+        refs, endpoint_ids = self.finding_refs, self.finding_ref_endpoint_ids
+        self.finding_refs, self.finding_ref_endpoint_ids = [], []
+        return refs, endpoint_ids
+
+    def record_product(
+        self,
+        product: Product,
+        location: Location,
+        status: str,
+        endpoint_id: int | None,
+    ) -> None:
+        """
+        Queue a product reference, letting Active win within the chunk.
+
+        The status recorded here only reflects this chunk;
+        ``_reconcile_product_statuses`` has the final say once every finding
+        reference is in place.
+        """
+        key = (location.id, product.id)
+        existing = self._product_refs.get(key)
+        if existing is None or (
+            status == ProductLocationStatus.Active
+            and existing[0] != ProductLocationStatus.Active
+        ):
+            self._product_refs[key] = (status, product, location, endpoint_id)
+
+    def product_ref_rows(self) -> tuple[list[LocationProductReference], list[int | None]]:
+        rows = [
+            LocationProductReference(
+                location=location,
+                product=product,
+                status=status,
+                relationship="",
+                relationship_data={},
+            )
+            for status, product, location, _ in self._product_refs.values()
+        ]
+        endpoint_ids = [endpoint_id for _, _, _, endpoint_id in self._product_refs.values()]
+        return rows, endpoint_ids
+
+
+# The finding -> test -> engagement -> product chain behind each Endpoint_Status,
+# prefetched one level at a time. The chain is prefetched, NOT select_related: as
+# one `finding__test__engagement__product` join it folds into the status query,
+# and on a large corpus the planner mis-estimates the status IN-list (~180x) and
+# seq-scans every finding/test/product to hash them down to the slice's handful of
+# rows (the 76-194s chunks behind the ~75% stall). Prefetching resolves each FK
+# level with a PK-driven IN query, which the planner answers by index lookup.
+#
+# `_add_status_references` reads only the FK that leads to the next level (and the
+# product itself), so every intermediate level loads just its id and that FK. A
+# full Finding row carries many wide text columns the migration never reads.
+_STATUS_CHAIN_PREFETCHES = (
+    Prefetch("finding", queryset=Finding.objects.only("id", "test")),
+    Prefetch("finding__test", queryset=Test.objects.only("id", "engagement")),
+    Prefetch("finding__test__engagement", queryset=Engagement.objects.only("id", "product")),
+    "finding__test__engagement__product",
+)
+
+
+# Phases tracked by --benchmark. Order is preserved in the summary table.
+PHASES = (
+    "fetch_chunk",      # iterator + prefetch queries for the next chunk
+    "url_create",       # URL.bulk_get_or_create + Location rows for the chunk
+    "tags",             # batched endpoint tag copy onto locations
+    "meta",             # DojoMeta copy onto the location
+    "finding_refs",     # LocationFindingReference creation per Endpoint_Status
+    "product_refs",     # LocationProductReference creation
+    "reconcile",        # recompute product-reference status from finding refs
+    "inheritance",      # per-chunk inherited-tag application
+)
+
+
+class Command(BaseCommand):
+
+    """
+    This management command creates a mapping from Endpoints and Endpoint Statuses to a new Locations system.
+    The following occurs:
+    - Endpoints -> URL (which will create a Location)
+    - Products on Endpoint -> LocationProductReference
+    - Findings on Endpoints -> LocationProductReference
+
+    The command is safe to re-run and converges on the state the source
+    Endpoints/Endpoint_Statuses describe:
+
+    - ``URL``/``Location`` rows are matched on ``identity_hash``, so an endpoint
+      that already migrated reuses its location instead of duplicating it.
+    - ``LocationFindingReference`` is upserted on (location, finding): a status,
+      auditor or audit time that has since changed on the source
+      ``Endpoint_Status`` is written over the stale value, while the original
+      ``created`` timestamp is preserved.
+    - ``LocationProductReference`` status is recomputed from the finding
+      references after each chunk, using the same rule as
+      ``Location.status_from_product`` (Active when the location has at least
+      one Active finding for that product). This repairs statuses left behind by
+      an earlier run and makes the outcome independent of the order endpoints
+      are visited in.
+    - ``DojoMeta`` rows and tag copies are insert-only, so re-runs neither
+      duplicate them nor overwrite edits made after the first migration.
+
+    Built to survive large installs:
+
+    - Endpoints are scanned in id order and every progress line prints the last
+      migrated id, so an interrupted run resumes with ``--start-after-id`` instead
+      of re-scanning from the start (a full re-run also converges, it just costs
+      the whole scan again).
+    - Memory is bounded by ``--batch-size``: every per-endpoint structure —
+      including the (product, location) pairs for tag inheritance, which is applied
+      per chunk — lives on the chunk and is dropped with it.
+    """
+
+    help = "Usage: manage.py migrate_endpoints_to_locations"
+
+    # `progress_callback`, `summary_callback` and `cancel_callback` are accepted by
+    # handle() but not exposed on the parser: they are programmatic hooks for in-process
+    # callers (Pro's migration suite passes them via call_command) and cannot be supplied
+    # on the command line. progress_callback(processed, total) drives a live bar;
+    # summary_callback(dict) reports the final {processed, total, locations, failures,
+    # cancelled}; cancel_callback() -> bool is polled at each chunk boundary and, when it
+    # returns True, stops the run cleanly between chunks (see _should_cancel).
+    stealth_options = ("progress_callback", "summary_callback", "cancel_callback")
+
+    def add_arguments(self, parser):
+        parser.add_argument(
+            "--batch-size",
+            type=int,
+            default=DEFAULT_BATCH_SIZE,
+            help="Endpoints read, and rows written, per batch "
+                 f"(default: {DEFAULT_BATCH_SIZE}).",
+        )
+        parser.add_argument(
+            "--progress-every",
+            type=int,
+            default=DEFAULT_PROGRESS_EVERY,
+            help="Emit a progress line once at least N endpoints have been migrated "
+                 "since the last one; lines land on batch boundaries, so a value "
+                 f"below --batch-size reports once per batch (default: {DEFAULT_PROGRESS_EVERY}).",
+        )
+        parser.add_argument(
+            "--benchmark",
+            action="store_true",
+            help="Track per-phase wall-clock and print a summary table at the end.",
+        )
+        parser.add_argument(
+            "--query-count",
+            action="store_true",
+            help="Force-debug the DB cursor and count queries per chunk. "
+                 "Has measurable overhead; use only for profiling runs.",
+        )
+        parser.add_argument(
+            "--start-after-id",
+            type=int,
+            default=None,
+            help="Resume after this endpoint id (exclusive). Endpoints are processed "
+                 "in id order and every progress line reports the last id written, so "
+                 "an interrupted run can be resumed from its final progress line "
+                 "instead of rescanning from the start. Re-running without it is also "
+                 "safe — the migration converges — it just repays the full scan.",
+        )
+
+    # -- Per-phase timing helpers --------------------------------------------
+
+    def _bench_start(self) -> float:
+        return time.perf_counter() if self.benchmark else 0.0
+
+    def _bench_end(self, phase: str, t0: float) -> None:
+        if self.benchmark:
+            self.timings[phase] += time.perf_counter() - t0
+            self.counts[phase] += 1
+
+    # -- Endpoint tag batching -----------------------------------------------
+
+    def _queue_location_tags(
+        self,
+        endpoint: Endpoint,
+        location: Location,
+        tag_names: set[str],
+    ) -> None:
+        """Queue endpoint tags for a batched write to their destination Location."""
+        if endpoint.id is None or location.id is None:
+            return
+        for tag_name in tag_names:
+            # Multiple legacy Endpoints may normalize to the same Location.
+            # Deduplicate by Location id so the through row and Tagulous count
+            # are each updated exactly once.
+            self.pending_tag_locations[tag_name][location.id] = location
+        self.pending_endpoint_tags[endpoint.id] = (location, tag_names)
+
+    # Detailed (id, error) tuples retained for the failure summary. The id SET is
+    # unbounded (needed for dedup and the final count; ints are cheap) but the
+    # error strings are capped: a pathological run where most endpoints fail
+    # would otherwise accumulate an exception string per endpoint.
+    MAX_FAILURE_DETAILS = 1000
+
+    def _record_endpoint_failure(self, endpoint_id: int | None, exc: Exception) -> None:
+        """Record an Endpoint once even if more than one migration phase fails."""
+        if endpoint_id in self.failed_endpoint_ids:
+            return
+        self.failed_endpoint_ids.add(endpoint_id)
+        if len(self.failed_endpoints) < self.MAX_FAILURE_DETAILS:
+            self.failed_endpoints.append((endpoint_id, str(exc)))
+
+    def _flush_location_tags(self) -> None:
+        """Persist queued tags, retrying per Endpoint if the batch write fails."""
+        if not self.pending_tag_locations:
+            return
+
+        tag_to_locations = {
+            tag_name: list(locations_by_id.values())
+            for tag_name, locations_by_id in self.pending_tag_locations.items()
+        }
+        t = self._bench_start()
+        try:
+            try:
+                # bulk_add_tag_mapping creates tags, through rows, and updates
+                # Tagulous counters in separate steps. The outer transaction
+                # makes the complete batch atomic if any step fails.
+                with transaction.atomic():
+                    bulk_add_tag_mapping(tag_to_locations, batch_size=self.batch_size)
+            except Exception:
+                endpoint_ids = list(self.pending_endpoint_tags)
+                logger.exception(
+                    "Batched endpoint tag copy failed for %d tagged endpoint(s); "
+                    "first endpoint ids=%s; retrying one endpoint at a time",
+                    len(endpoint_ids),
+                    endpoint_ids[:10],
+                )
+
+                # Preserve the command's documented per-row resilience. This
+                # slower path runs only after a failed batch and isolates a bad
+                # Endpoint without discarding valid tag writes for its peers.
+                for endpoint_id, (location, tag_names) in self.pending_endpoint_tags.items():
+                    endpoint_mapping = {
+                        tag_name: [location]
+                        for tag_name in tag_names
+                    }
+                    try:
+                        with transaction.atomic():
+                            bulk_add_tag_mapping(endpoint_mapping, batch_size=self.batch_size)
+                    except Exception as exc:
+                        logger.exception(
+                            "Failed to copy tags for endpoint id=%s; continuing",
+                            endpoint_id,
+                        )
+                        self._record_endpoint_failure(endpoint_id, exc)
+        finally:
+            self._bench_end("tags", t)
+            self.pending_tag_locations.clear()
+            self.pending_endpoint_tags.clear()
+
+    # -- Chunked reads ---------------------------------------------------------
+
+    def _iter_chunks(self, queryset):
+        """
+        Yield lists of at most ``batch_size`` endpoints.
+
+        ``queryset.iterator(chunk_size=...)`` already fetches and prefetches a
+        chunk at a time, so re-buffering into a list of the same size costs no
+        extra memory over what Django is already holding, and it gives the
+        migration a batch to write in one shot per phase.
+        """
+        iterator = queryset.iterator(chunk_size=self.batch_size)
+        while True:
+            t = self._bench_start()
+            chunk = list(islice(iterator, self.batch_size))
+            self._bench_end("fetch_chunk", t)
+            if not chunk:
+                return
+            yield chunk
+
+    # -- Bulk writes with per-row fallback ------------------------------------
+
+    def _bulk_create_rows(
+        self,
+        phase: str,
+        model,
+        rows: list,
+        endpoint_ids: list[int | None],
+        cm_factory=None,
+        conflict_kwargs: dict | None = None,
+    ) -> None:
+        """
+        Write ``rows`` in one ``bulk_create``, retrying per row if that fails.
+
+        The whole chunk goes out as a single statement on the happy path. If it
+        raises we fall back to one row at a time so a single bad row can't
+        discard the valid rows it was batched with — the same
+        batch-then-isolate shape ``_flush_location_tags`` uses. Failures are
+        attributed to the endpoint that produced the row via
+        ``endpoint_ids[i]``.
+
+        ``conflict_kwargs`` selects the upsert behaviour (``ignore_conflicts``
+        vs ``update_conflicts`` + ``update_fields``/``unique_fields``); callers
+        must deduplicate rows on the conflict target first, because Postgres
+        rejects a statement whose ``ON CONFLICT DO UPDATE`` would touch the
+        same row twice.
+
+        ``cm_factory`` is a callable returning a context manager to wrap each
+        write (used for ``_suspend_auto_now_add``); it must be a factory rather
+        than an instance because the retry path enters it once per row.
+        """
+        if not rows:
+            return
+        cm_factory = cm_factory or contextlib.nullcontext
+        conflict_kwargs = conflict_kwargs or {"ignore_conflicts": True}
+        t = self._bench_start()
+        try:
+            try:
+                with cm_factory():
+                    model.objects.bulk_create(
+                        rows, batch_size=self.batch_size, **conflict_kwargs,
+                    )
+            except Exception:
+                logger.exception(
+                    "Batched %s write failed for %d row(s); "
+                    "retrying one row at a time",
+                    phase, len(rows),
+                )
+                for row, endpoint_id in zip(rows, endpoint_ids, strict=True):
+                    try:
+                        with transaction.atomic(), cm_factory():
+                            model.objects.bulk_create([row], **conflict_kwargs)
+                    except Exception as exc:
+                        logger.exception(
+                            "Failed to write %s row for endpoint id=%s; continuing",
+                            phase, endpoint_id,
+                        )
+                        self._record_endpoint_failure(endpoint_id, exc)
+        finally:
+            self._bench_end(phase, t)
+
+    def _reconcile_product_statuses(self, location_ids: list[int]) -> None:
+        """
+        Recompute ``LocationProductReference.status`` for the chunk's locations.
+
+        A product reference is Active exactly when the location has at least
+        one Active finding reference for that product — the same rule
+        ``Location.status_from_product`` applies. Recomputing it from the
+        finding refs in one set-based UPDATE per chunk is what makes re-runs
+        converge:
+
+        - it repairs stale statuses left by an earlier run (or by the previous
+          first-write-wins behaviour of ``associate_with_product``);
+        - it is order independent, so a location shared by endpoints in
+          different chunks ends up Active if *any* of its findings is Active,
+          without the migration having to remember cross-chunk state.
+
+        Only locations touched by this chunk are considered, so the statement
+        stays bounded no matter how large the install is.
+        """
+        if not location_ids:
+            return
+        t = self._bench_start()
+        try:
+            has_active_finding = LocationFindingReference.objects.filter(
+                location_id=OuterRef("location_id"),
+                finding__test__engagement__product_id=OuterRef("product_id"),
+                status=FindingLocationStatus.Active,
+            )
+            try:
+                LocationProductReference.objects.filter(
+                    location_id__in=location_ids,
+                ).update(
+                    status=Case(
+                        When(Exists(has_active_finding), then=Value(ProductLocationStatus.Active)),
+                        default=Value(ProductLocationStatus.Mitigated),
+                    ),
+                    updated=timezone.now(),
+                )
+            except Exception:
+                # Reconciliation is a repair pass over rows that are already
+                # committed, so a failure here costs accuracy on this chunk's
+                # statuses, not data. Keep going rather than abort the run.
+                logger.exception(
+                    "Product-reference status reconciliation failed for %d location(s); "
+                    "continuing", len(location_ids),
+                )
+        finally:
+            self._bench_end("reconcile", t)
+
+    # -- Migration logic --------------------------------------------------
+
+    def _resolve_locations(self, endpoints: list[Endpoint]) -> list[tuple[Endpoint, Location]]:
+        """
+        Resolve one Location per endpoint for the whole chunk.
+
+        ``URL.bulk_get_or_create`` does the work in ~3 queries per chunk (one
+        lookup by ``identity_hash`` plus a ``bulk_create`` for the parent
+        Location rows and the URL rows) in place of the per-endpoint
+        ``get_or_create``, which cost a savepoint pair, a SELECT, a
+        ``validate_unique`` SELECT and two INSERTs each.
+
+        Each URL is validated individually first. ``bulk_get_or_create`` only
+        calls ``clean()``, whereas the per-endpoint ``save()`` this replaces ran
+        ``full_clean()`` — so validating here keeps an endpoint whose values
+        can't pass field validation (empty host, out-of-range port, …) from
+        being written as an invalid Location, and reports it against its own id
+        instead of taking the chunk down. ``validate_unique`` is left off: the
+        identity_hash lookup ``bulk_get_or_create`` already does resolves
+        duplicates without a SELECT per row.
+
+        If the bulk write itself still fails we fall back to the per-endpoint
+        ``get_or_create`` path for the chunk, which migrates every good endpoint
+        and attributes the failure to the one that caused it.
+        """
+        t = self._bench_start()
+        try:
+            pairs: list[tuple[Endpoint, URL]] = []
+            for endpoint in endpoints:
+                url = URL.from_parts(
+                    protocol=endpoint.protocol,
+                    user_info=endpoint.userinfo,
+                    host=endpoint.host,
+                    port=endpoint.port,
+                    path=endpoint.path,
+                    query=endpoint.query,
+                    fragment=endpoint.fragment,
+                )
+                try:
+                    # Mirrors what BaseModelWithoutTimeMeta.save() would have
+                    # done for this URL, including the flag it keys off. This
+                    # backfill command deliberately stays on
+                    # settings.V3_FEATURE_LOCATIONS rather than the runtime
+                    # dojo.location.feature accessor (it runs under
+                    # Endpoint.allow_endpoint_init() and its flag reads are
+                    # migration mechanics, not request-path behaviour). See
+                    # dojo/location/feature.py.
+                    if settings.V3_FEATURE_LOCATIONS:
+                        url.full_clean(validate_unique=False, validate_constraints=False)
+                    else:
+                        url.clean()
+                except Exception as exc:
+                    endpoint_id = getattr(endpoint, "id", None)
+                    logger.exception(
+                        "Failed to migrate endpoint id=%s; continuing", endpoint_id,
+                    )
+                    self._record_endpoint_failure(endpoint_id, exc)
+                    continue
+                pairs.append((endpoint, url))
+
+            if not pairs:
+                return []
+
+            try:
+                created: list[URL] = []
+                saved = URL.bulk_get_or_create([url for _, url in pairs], created_out=created)
+                self.location_count += len(created)
+            except Exception:
+                logger.exception(
+                    "Bulk location resolution failed for %d endpoint(s); "
+                    "falling back to one get_or_create per endpoint",
+                    len(pairs),
+                )
+                resolved = []
+                for endpoint, url in pairs:
+                    try:
+                        resolved.append((endpoint, URL.get_or_create_from_object(url).location))
+                    except Exception as exc:
+                        endpoint_id = getattr(endpoint, "id", None)
+                        logger.exception(
+                            "Failed to migrate endpoint id=%s; continuing", endpoint_id,
+                        )
+                        self._record_endpoint_failure(endpoint_id, exc)
+                return resolved
+
+            return [
+                (endpoint, saved_url.location)
+                for (endpoint, _), saved_url in zip(pairs, saved, strict=True)
+            ]
+        finally:
+            self._bench_end("url_create", t)
+
+    def _process_chunk(self, endpoints: list[Endpoint]) -> None:
+        """
+        Migrate a chunk of endpoints with one bulk write per phase.
+
+        Everything between the location resolve and the writes is pure Python
+        over already-prefetched data, so the DB sees a fixed handful of
+        statements per chunk rather than a dozen per endpoint. The chunk's
+        Endpoint_Status rows are the exception: they are read and written in
+        slices of ``--batch-size`` (see ``_migrate_statuses``), because one
+        endpoint can carry tens of thousands of them.
+        """
+        resolved = self._resolve_locations(endpoints)
+        if not resolved:
+            return
+
+        rows = _ChunkRows()
+        endpoints_per_location: dict[int, int] = defaultdict(int)
+        for _, location in resolved:
+            endpoints_per_location[location.id] += 1
+        rows.shared_location_ids = {
+            location_id for location_id, count in endpoints_per_location.items() if count > 1
+        }
+        # Endpoints whose tags/meta were collected without error, in chunk order.
+        # Only these get their statuses migrated, as before.
+        migrated: dict[int, tuple[Endpoint, Location]] = {}
+        for endpoint, location in resolved:
+            endpoint_id = getattr(endpoint, "id", None)
+            try:
+                # Queue endpoint tags for one bulk write per chunk instead of
+                # making Tagulous look up and attach tags once per endpoint.
+                t = self._bench_start()
+                tag_names = {tag.name for tag in endpoint.tags.all()}
+                if tag_names:
+                    self._queue_location_tags(endpoint, location, tag_names)
+                self._bench_end("tags", t)
+
+                for meta in endpoint.endpoint_meta.all():
+                    rows.add_meta(meta, location, endpoint.product, endpoint_id)
+
+                # Track the endpoint's own product as a contributor for the
+                # per-chunk tag inheritance pass (the no-findings branch
+                # of `_migrate_statuses` also depends on this product, and it
+                # won't be tracked otherwise).
+                if endpoint.product_id:
+                    rows.track_product_location(endpoint.product, location)
+
+                if endpoint_id is not None:
+                    migrated[endpoint_id] = (endpoint, location)
+            except Exception as exc:
+                logger.exception("Failed to migrate endpoint id=%s; continuing", endpoint_id)
+                self._record_endpoint_failure(endpoint_id, exc)
+
+        # DojoMeta: `ignore_conflicts` on unique_together (location, location_product, name). A
+        # conflict is by definition the row we would otherwise have fetched, so
+        # skipping it keeps re-runs no-ops and leaves any post-migration edit to
+        # a metadata value alone.
+        self._bulk_create_rows("meta", DojoMeta, rows.meta, rows.meta_endpoint_ids)
+
+        self._migrate_statuses(migrated, rows)
+
+        # LocationProductReference: insert-only. The status carried here is
+        # derived from this chunk alone, so it is not authoritative — the
+        # reconciliation pass below recomputes it from the finding refs.
+        product_ref_rows, product_ref_endpoint_ids = rows.product_ref_rows()
+        self._bulk_create_rows(
+            "product_refs", LocationProductReference,
+            product_ref_rows, product_ref_endpoint_ids,
+        )
+
+        chunk_location_ids = {location.id for _, location in resolved}
+        self._reconcile_product_statuses(list(chunk_location_ids))
+
+        # Inheritance runs per chunk (bounded memory, converging) — see the
+        # method's docstring for why this is equivalent to an end-of-run pass.
+        self._run_tag_inheritance_for_chunk(rows)
+
+    def _iter_status_slices(self, endpoint_ids: list[int]):
+        """
+        Yield the chunk's Endpoint_Status rows in lists of at most ``batch_size``.
+
+        Statuses are not prefetched onto the endpoints: a chunk holds
+        ``batch_size`` endpoints, but one endpoint can carry tens of thousands of
+        statuses, and holding every status (plus a reference row per status) of
+        a chunk at once is what pushed a large run past its memory limit.
+        Streaming them keeps the rows in memory bounded by ``batch_size`` no
+        matter how the statuses are spread over the endpoints. Ordered by
+        endpoint, then id, so references are queued in the same order as when
+        they hung off the id-ordered endpoints.
+        """
+        queryset = (
+            Endpoint_Status.objects
+            .filter(endpoint_id__in=endpoint_ids)
+            .order_by("endpoint_id", "id")
+            .prefetch_related(*_STATUS_CHAIN_PREFETCHES)
+        )
+        iterator = queryset.iterator(chunk_size=self.batch_size)
+        while True:
+            t = self._bench_start()
+            statuses = list(islice(iterator, self.batch_size))
+            self._bench_end("fetch_chunk", t)
+            if not statuses:
+                return
+            yield statuses
+
+    def _migrate_statuses(
+        self,
+        migrated: dict[int, tuple[Endpoint, Location]],
+        rows: _ChunkRows,
+    ) -> None:
+        """
+        Write the chunk's finding references and queue its product references.
+
+        Bypasses ``Location.associate_with_finding`` (which would trigger
+        full_clean validation plus the post_save inherit_tags signal per row)
+        and is semantically equivalent to it for this migration. Finding
+        references are written once per status slice, so neither the statuses
+        nor their reference rows accumulate over the chunk.
+        """
+        if not migrated:
+            return
+        endpoints_with_statuses: set[int] = set()
+        # Endpoints whose own reference building raised. Only these stop collecting: as before,
+        # a failure part-way through one endpoint's statuses ends that endpoint's loop, while a
+        # failure elsewhere for the endpoint (a meta row, one reference row rejected at write
+        # time) leaves its remaining statuses to be migrated. Checking the run-wide
+        # failed_endpoint_ids here would also drop those, which the old code never did.
+        stopped_endpoint_ids: set[int] = set()
+        for statuses in self._iter_status_slices(list(migrated)):
+            for endpoint_status in statuses:
+                endpoint_id = endpoint_status.endpoint_id
+                endpoints_with_statuses.add(endpoint_id)
+                if endpoint_id in stopped_endpoint_ids:
+                    continue
+                _, location = migrated[endpoint_id]
+                try:
+                    self._add_status_references(endpoint_status, location, rows, endpoint_id)
+                except Exception as exc:
+                    logger.exception("Failed to migrate endpoint id=%s; continuing", endpoint_id)
+                    self._record_endpoint_failure(endpoint_id, exc)
+                    stopped_endpoint_ids.add(endpoint_id)
+            self._write_finding_refs(rows)
+
+        # No findings: associate with the endpoint's product if one exists.
+        for endpoint_id, (endpoint, location) in migrated.items():
+            if endpoint_id in endpoints_with_statuses or not endpoint.product_id:
+                continue
+            rows.record_product(
+                endpoint.product, location, ProductLocationStatus.Mitigated, endpoint_id,
+            )
+
+    def _write_finding_refs(self, rows: _ChunkRows) -> None:
+        """
+        Upsert the queued finding references and empty the queue.
+
+        Upsert on (location, finding) so a re-run syncs the status/auditor/
+        audit_time when the source Endpoint_Status has moved on. `created` is
+        deliberately absent from update_fields: the original creation timestamp
+        is preserved on repeat runs.
+        """
+        refs, endpoint_ids = rows.drain_finding_refs()
+        self._bulk_create_rows(
+            "finding_refs", LocationFindingReference,
+            refs, endpoint_ids,
+            cm_factory=lambda: _suspend_auto_now_add(LocationFindingReference, "created"),
+            conflict_kwargs={
+                "update_conflicts": True,
+                "update_fields": ["status", "auditor", "audit_time", "updated"],
+                "unique_fields": ["location", "finding"],
+            },
+        )
+
+    def _add_status_references(
+        self,
+        endpoint_status: Endpoint_Status,
+        location: Location,
+        rows: _ChunkRows,
+        endpoint_id: int,
+    ) -> None:
+        """Queue the finding reference and product reference for one status."""
+        finding = endpoint_status.finding
+        if finding is None:
+            return
+        product = finding.test.engagement.product
+        # Track this contributing product for the per-chunk tag
+        # inheritance pass (covers the case where a finding's product
+        # differs from endpoint.product).
+        rows.track_product_location(product, location)
+        status = self._convert_endpoint_status_to_string_status(endpoint_status)
+        rows.record_product(
+            product,
+            location,
+            ProductLocationStatus.Active
+            if status == FindingLocationStatus.Active
+            else ProductLocationStatus.Mitigated,
+            endpoint_id,
+        )
+
+        # Endpoint_Status.date is a Date; the original code persisted
+        # the same midnight-aware datetime in a post-save UPDATE. We
+        # set it directly here: bulk_create skips auto_now_add so the
+        # explicit value is honored.
+        created_dt = timezone.make_aware(datetime.datetime(
+            endpoint_status.date.year,
+            endpoint_status.date.month,
+            endpoint_status.date.day,
+        ))
+        rows.add_finding_ref(LocationFindingReference(
+            location=location,
+            finding_id=finding.id,
+            status=status,
+            auditor_id=endpoint_status.mitigated_by_id,
+            audit_time=endpoint_status.mitigated_time or endpoint_status.last_modified,
+            relationship="",
+            relationship_data={},
+            created=created_dt,
+        ), endpoint_id)
+
+    def _convert_endpoint_status_to_string_status(self, endpoint_status: Endpoint_Status) -> str:
+        """
+        Start the conversion with the "special" statuses first since we are moving to a model
+        of having a single status possible rather than a combo of many
+        """
+        if endpoint_status.risk_accepted:
+            return FindingLocationStatus.RiskAccepted
+        if endpoint_status.false_positive:
+            return FindingLocationStatus.FalsePositive
+        if endpoint_status.out_of_scope:
+            return FindingLocationStatus.OutOfScope
+        if endpoint_status.mitigated:
+            return FindingLocationStatus.Mitigated
+        # Default to Active
+        return FindingLocationStatus.Active
+
+    # -- Progress + summary reporting ----------------------------------------
+
+    @staticmethod
+    def _fmt_duration(seconds: float) -> str:
+        s = int(seconds)
+        h, rem = divmod(s, 3600)
+        m, s = divmod(rem, 60)
+        if h:
+            return f"{h}h {m}m"
+        if m:
+            return f"{m}m {s}s"
+        return f"{s}s"
+
+    def _emit_progress(self, processed: int, total: int, checkpoint_id: int | None = None) -> None:
+        """
+        Publish chunk-level progress to an optional programmatic callback.
+
+        Pro's migration suite passes ``progress_callback`` (a stealth option) so it can
+        persist processed/total for a progress bar and ETA, and ``checkpoint_id`` — the
+        last endpoint id committed so far — so an interrupted run can resume from it via
+        ``--start-after-id``. The callback is invoked as
+        ``callback(processed, total, checkpoint_id)``; ``checkpoint_id`` is None on the
+        initial 0-tick, before any chunk has committed. A callback failure must never
+        abort a multi-hour migration, so it is swallowed with a logged warning. CLI runs
+        pass no callback and are unaffected.
+        """
+        callback = self.progress_callback
+        if callback is None:
+            return
+        try:
+            callback(processed, total, checkpoint_id)
+        except Exception:
+            logger.warning("progress_callback raised; continuing migration", exc_info=True)
+
+    def _emit_summary(self, summary: dict) -> None:
+        """
+        Publish the final run summary to an optional programmatic callback.
+
+        Pro's migration suite passes ``summary_callback`` (a stealth option) to persist
+        the distinct-location count and the per-endpoint failures. Carried separately
+        from progress because handle() cannot return it: BaseCommand.execute writes any
+        truthy return to stdout and a dict has no ``.endswith``. Swallowed like progress.
+        """
+        callback = self.summary_callback
+        if callback is None:
+            return
+        try:
+            callback(summary)
+        except Exception:
+            logger.warning("summary_callback raised; continuing migration", exc_info=True)
+
+    def _should_cancel(self) -> bool:
+        """
+        Ask an optional cancel probe whether the run should stop.
+
+        Pro's migration suite passes ``cancel_callback`` (a stealth option) that returns
+        True once a superuser has requested cancellation. Polled at each chunk boundary,
+        where the DB is already in a consistent, resumable state.
+
+        Unlike progress/summary, a raising probe is treated as "do not cancel" rather than
+        propagated: a transient DB error while checking the flag must not throw away hours
+        of migration work. A probe that can never succeed is handled out of band by the
+        suite's stale-run recovery (force cancel). CLI runs pass no callback and never stop.
+        """
+        callback = self.cancel_callback
+        if callback is None:
+            return False
+        try:
+            return bool(callback())
+        except Exception:
+            logger.warning("cancel_callback raised; continuing migration", exc_info=True)
+            return False
+
+    def _log_progress(
+        self,
+        i: int,
+        total: int,
+        run_t0: float,
+        queries_this_window: int | None,
+        endpoints_this_window: int,
+        last_id: int | None = None,
+    ) -> None:
+        elapsed = time.time() - run_t0
+        rate = i / elapsed if elapsed > 0 else 0.0
+        remaining = (total - i) / rate if rate > 0 else 0.0
+        pct = (i / total * 100.0) if total else 100.0
+        line = (f"Migrated {i:,}/{total:,} endpoints ({pct:.1f}%) — "
+                f"{rate:.1f} endpoints/sec — ETA {self._fmt_duration(remaining)}")
+        if queries_this_window is not None and endpoints_this_window:
+            # Per-endpoint query count for this reporting window only.
+            line += f" — {queries_this_window / endpoints_this_window:.1f} queries/endpoint"
+        if last_id is not None:
+            # The resume cursor: an interrupted run restarts from here with
+            # --start-after-id instead of rescanning everything before it.
+            line += f" — last id {last_id} (resume: --start-after-id {last_id})"
+        self.stdout.write(self.style.SUCCESS(line))
+
+        if self.benchmark:
+            parts = [f"{p}={self.timings[p]:.1f}s" for p in PHASES]
+            self.stdout.write("  " + "  ".join(parts))
+
+    def _print_benchmark_summary(self, total_endpoints: int, total_seconds: float) -> None:
+        if not self.benchmark:
+            return
+        total_phase = sum(self.timings.values()) or 1.0
+        self.stdout.write(self.style.SUCCESS("=== Benchmark summary ==="))
+        self.stdout.write(f"{'phase':<16}{'total_s':>10}{'per_endpoint_ms':>18}{'share':>10}")
+        for phase in PHASES:
+            t = self.timings[phase]
+            per = (t * 1000.0 / total_endpoints) if total_endpoints else 0.0
+            share = (t / total_phase * 100.0)
+            self.stdout.write(f"{phase:<16}{t:>10.2f}{per:>18.2f}{share:>9.1f}%")
+        self.stdout.write(f"{'(wall-clock)':<16}{total_seconds:>10.2f}"
+                          f"{(total_seconds * 1000.0 / total_endpoints if total_endpoints else 0):>18.2f}"
+                          f"{'100.0%':>10}")
+
+    # -- Post-migration tag inheritance --------------------------------------
+
+    def _run_tag_inheritance_for_chunk(self, rows: _ChunkRows) -> None:
+        """
+        Apply inherited tags for this chunk's (product, location) pairs.
+
+        Runs at every chunk boundary instead of once at the end of the run,
+        for the same reason ``_reconcile_product_statuses`` does: the helper
+        rediscovers each location's *full* product set from the committed
+        reference rows at call time, so when a shared location gains another
+        product's references in a later chunk, that chunk's pass recomputes the
+        union and the result converges regardless of chunk order. Running
+        per-chunk is what lets the run hold only one chunk's Location objects
+        at a time — the previous end-of-run pass retained every migrated
+        Location for the whole run, which is unsustainable at
+        multi-million-endpoint scale.
+
+        Each product group is wrapped in its own try/except so a failure on one
+        group doesn't prevent the rest — the same philosophy as the
+        per-endpoint loop. The reference rows are already committed, so partial
+        failure leaves a consistent (if incompletely reconciled) inheritance
+        state that a re-run repairs.
+        """
+        if not rows.inheritance_by_product:
+            return
+
+        # Lazy import: the inheritance module imports the full model layer, so
+        # keep it out of management-command discovery.
+        from dojo.tags import inheritance as tag_inheritance  # noqa: PLC0415
+
+        t = self._bench_start()
+        try:
+            for prod_id, loc_ids in rows.inheritance_by_product.items():
+                product = rows.product_by_id[prod_id]
+                locations = [rows.location_by_id[lid] for lid in loc_ids]
+                try:
+                    tag_inheritance.apply_inherited_tags_for_locations(
+                        locations,
+                        product=product,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Tag inheritance pass failed for product id=%s "
+                        "(%d location(s)); continuing with remaining products",
+                        prod_id, len(locations),
+                    )
+                    self.inheritance_failures += 1
+                else:
+                    self.inheritance_pairs += len(loc_ids)
+                    self.inheritance_product_ids.add(prod_id)
+        finally:
+            self._bench_end("inheritance", t)
+
+    def _print_tag_inheritance_summary(self) -> None:
+        if not (self.inheritance_pairs or self.inheritance_failures):
+            return
+        msg = (
+            f"Tag inheritance: applied to {self.inheritance_pairs:,} (product, location) "
+            f"pair(s) across {len(self.inheritance_product_ids):,} product(s), "
+            f"per chunk during the run"
+        )
+        if self.inheritance_failures:
+            self.stdout.write(self.style.WARNING(
+                f"{msg} — {self.inheritance_failures} product group(s) failed"))
+        else:
+            self.stdout.write(self.style.SUCCESS(msg))
+
+    # -- handle ---------------------------------------------------------------
+
+    def handle(self, *args, **options):
+        self.benchmark = bool(options.get("benchmark"))
+        self.query_count = bool(options.get("query_count"))
+        self.batch_size = int(options["batch_size"])
+        self.progress_every = int(options["progress_every"])
+        self.start_after_id = options.get("start_after_id")
+        # Optional programmatic hooks (see stealth_options). None for CLI runs.
+        self.progress_callback = options.get("progress_callback")
+        self.summary_callback = options.get("summary_callback")
+        self.cancel_callback = options.get("cancel_callback")
+        # Set when the cancel probe asks us to stop, so the summary can report it.
+        self.cancelled = False
+
+        # Per-phase wall-clock accumulators.
+        self.timings = dict.fromkeys(PHASES, 0.0)
+        self.counts = dict.fromkeys(PHASES, 0)
+
+        # Aggregate counters for the per-chunk tag inheritance pass (the pairs
+        # themselves live on each chunk's _ChunkRows and are dropped with it).
+        self.inheritance_pairs = 0
+        self.inheritance_product_ids: set[int] = set()
+        self.inheritance_failures = 0
+
+        # Endpoint tags are copied to Locations once per migration batch.
+        # The nested Location-id mapping prevents duplicate through rows and
+        # tag-count drift when multiple Endpoints normalize to one Location.
+        self.pending_tag_locations: dict[str, dict[int, Location]] = defaultdict(dict)
+        self.pending_endpoint_tags: dict[int, tuple[Location, set[str]]] = {}
+
+        # Collected per-endpoint failures so a single bad row doesn't abort
+        # a multi-hour migration. Each entry is (endpoint_id, exception_str).
+        self.failed_endpoints: list[tuple[int | None, str]] = []
+        self.failed_endpoint_ids: set[int | None] = set()
+
+        # Count of new distinct Locations this run created, summed per chunk from
+        # bulk_get_or_create's created_out (see _resolve_locations). A per-chunk count
+        # rather than a whole-run set of ids: that set grew with the corpus and was the
+        # accumulator that OOM'd large migrations at ~75%. On a first run this equals the
+        # distinct Locations the endpoints collapsed onto; a resume counts only what it
+        # newly created.
+        self.location_count: int = 0
+
+        if self.query_count:
+            connection.force_debug_cursor = True
+        queries_at_window_start = len(connection.queries) if self.query_count else 0
+
+        # Lazy import: the inheritance module imports the full model layer, so
+        # keep it out of management-command discovery.
+        from dojo.tags import inheritance as tag_inheritance  # noqa: PLC0415
+
+        # Allow endpoints to work with V3/Locations enabled, and keep the
+        # per-instance tag-inheritance signals out of the hot loop.
+        #
+        # Every `Location` row created here fires `inherit_tags_on_instance`,
+        # which calls `Location.all_related_products()` — an OR across two
+        # multi-join paths (`LocationProductReference` and
+        # `Finding -> Test -> Engagement -> Product` via
+        # `LocationFindingReference`) that Postgres can only answer by
+        # materialising the whole join and filtering it. Because this migration
+        # is itself filling `LocationFindingReference`, that query gets more
+        # expensive with every endpoint migrated, which is what turned the run
+        # into an O(n^2) crawl (~105ms of the ~132ms each `Location` insert
+        # cost, on a small dataset, growing from there).
+        #
+        # The work is redundant regardless: a freshly created Location has no
+        # product references yet, so the signal has nothing to inherit. Correct
+        # inheritance is applied in bulk by `_run_tag_inheritance_for_chunk()` once the
+        # references exist, which is why that pass already exists.
+        with Endpoint.allow_endpoint_init():
+            # Prefetch everything the per-endpoint loop will touch so the
+            # iterator doesn't trigger N+1 joins:
+            #   - `product` is select_related so we don't lazy-load it for the
+            #     no-findings branch
+            #   - `tags` and `endpoint_meta` are prefetched managers
+            #   - `status_endpoint` is NOT prefetched: a chunk's statuses are
+            #     streamed in batch-size slices by `_migrate_statuses`, because one
+            #     endpoint can carry tens of thousands of them.
+            # Explicit id ordering makes the scan deterministic across runs,
+            # which is what gives the progress lines' "last id" its meaning as
+            # a resume cursor for --start-after-id.
+            queryset = (
+                Endpoint.objects.all()
+                .order_by("id")
+                .select_related("product")
+                .prefetch_related(
+                    "tags",
+                    "endpoint_meta",
+                )
+            )
+            if self.start_after_id is not None:
+                queryset = queryset.filter(id__gt=self.start_after_id)
+            # Grab the total count so we can communicate progress
+            endpoint_count = queryset.count()
+            resume_note = (
+                f", resuming after endpoint id {self.start_after_id}"
+                if self.start_after_id is not None else ""
+            )
+            self.stdout.write(self.style.WARNING(
+                f"Starting migration of {endpoint_count:,} endpoints "
+                f"(batch={self.batch_size}, progress every {self.progress_every}, "
+                f"benchmark={'on' if self.benchmark else 'off'}, "
+                f"query-count={'on' if self.query_count else 'off'}{resume_note})",
+            ))
+            # Publish the total up front so a consumer can render a bar/ETA before
+            # the first chunk lands.
+            self._emit_progress(0, endpoint_count)
+
+            run_t0 = time.time()
+            i = 0
+            last_reported = 0
+            # Process endpoints a chunk at a time. Each chunk issues a fixed
+            # handful of statements — one lookup + two inserts for the
+            # locations, then one write per reference/meta/tag phase — instead
+            # of a dozen round trips per endpoint. `_process_chunk` isolates
+            # failures itself: per-endpoint for anything that can raise while
+            # building rows, and per-row on a failed batch write, so one bad
+            # endpoint still can't abort a multi-hour migration.
+            last_id = None
+            with tag_inheritance.suppress_tag_inheritance():
+                for chunk in self._iter_chunks(queryset):
+                    self._process_chunk(chunk)
+                    i += len(chunk)
+                    # Chunks arrive in id order, so the chunk's last endpoint id
+                    # is the resume cursor for everything migrated so far.
+                    last_id = chunk[-1].id
+
+                    # Flush independently of per-endpoint success so a failing
+                    # endpoint at a chunk boundary cannot leave the queue growing.
+                    self._flush_location_tags()
+
+                    # Programmatic progress at every chunk boundary (independent
+                    # of the throttled stdout line below), for the migration suite.
+                    # last_id (this chunk's final endpoint id, set above) is the resume
+                    # cursor for everything committed so far.
+                    self._emit_progress(i, endpoint_count, checkpoint_id=last_id)
+
+                    # Cancellation checkpoint. Chunks are separately committed and the
+                    # tag queue was just flushed, so stopping here leaves a consistent,
+                    # resumable state that a later run converges from (the class is
+                    # idempotent by design). Break rather than return: the tag
+                    # inheritance pass below still needs to run for what we migrated.
+                    if self._should_cancel():
+                        self.cancelled = True
+                        self.stdout.write(self.style.WARNING(
+                            f"Cancellation requested; stopping after {i:,}/{endpoint_count:,} "
+                            f"endpoints at a chunk boundary. Re-run to finish.",
+                        ))
+                        break
+
+                    # Progress report once at least --progress-every endpoints
+                    # have been migrated since the last line.
+                    if i - last_reported >= self.progress_every or i >= endpoint_count:
+                        queries_in_window = None
+                        if self.query_count:
+                            queries_in_window = len(connection.queries) - queries_at_window_start
+                            # Trim the query log so memory doesn't balloon on long runs;
+                            # after clear() the next window's baseline is 0.
+                            connection.queries_log.clear()
+                            queries_at_window_start = 0
+                        self._log_progress(
+                            i, endpoint_count, run_t0, queries_in_window, i - last_reported,
+                            last_id=last_id,
+                        )
+                        last_reported = i
+
+            elapsed = time.time() - run_t0
+            n_failed = len(self.failed_endpoint_ids)
+            successful = i - n_failed
+            lead = "Stopped early." if self.cancelled else "Done."
+            self.stdout.write(self.style.SUCCESS(
+                f"{lead} Migrated {successful:,}/{i:,} endpoints in {self._fmt_duration(elapsed)} "
+                f"({(i / elapsed if elapsed else 0):.2f} endpoints/sec).",
+            ))
+            if n_failed:
+                preview_ids = [eid for eid, _ in self.failed_endpoints[:10]]
+                self.stdout.write(self.style.WARNING(
+                    f"{n_failed:,} endpoint(s) failed; see logger output above "
+                    f"for tracebacks. First failing endpoint IDs: {preview_ids}",
+                ))
+
+            # Inherited tags were applied per chunk during the loop
+            # (`bulk_create` skips the `inherit_tags_on_linked_instance`
+            # post_save signal, so deployments with
+            # `enable_product_tag_inheritance` on would otherwise miss them);
+            # this just reports the aggregate.
+            self._print_tag_inheritance_summary()
+
+            self._print_benchmark_summary(i, elapsed)
+
+        if self.query_count:
+            connection.force_debug_cursor = False
+
+        # Summary for programmatic callers (the Pro Locations migration suite). CLI runs
+        # pass no summary_callback and are unaffected. ``locations`` is the count of new
+        # distinct Locations this run created (<= processed; on a first run, the number the
+        # endpoints collapsed onto — a resume counts only what it newly created);
+        # ``failures`` are the per-endpoint errors isolated during the run so the suite can
+        # surface "N skipped";
+        # ``cancelled`` tells the suite the run stopped early (processed < total) rather
+        # than finishing, so it can land the run on "cancelled" instead of "completed".
+        self._emit_summary(
+            {
+                "processed": i,
+                "total": endpoint_count,
+                "locations": self.location_count,
+                "failures": [{"id": endpoint_id, "error": error} for endpoint_id, error in self.failed_endpoints],
+                "cancelled": self.cancelled,
+            },
+        )

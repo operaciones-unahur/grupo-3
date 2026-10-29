@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OWASPZAPReport version="2.14.0" generated="2026-10-14T15:00:00">
+  <site name="http://localhost:8080" host="localhost" port="8080" ssl="false">
+    <alerts>
+      <alertitem>
+        <pluginid>10021</pluginid>
+        <alert>X-Content-Type-Options Header Missing</alert>
+        <name>X-Content-Type-Options Header Missing</name>
+        <riskcode>1</riskcode>
+        <confidence>2</confidence>
+        <riskdesc>Low (Medium)</riskdesc>
+        <desc>&lt;p&gt;Header missing&lt;/p&gt;</desc>
+        <instances>
+          <instance>
+            <uri>http://localhost:8080/</uri>
+            <method>GET</method>
+          </instance>
+        </instances>
+        <count>1</count>
+        <solution>&lt;p&gt;Add header&lt;/p&gt;</solution>
+        <otherinfo></otherinfo>
+        <reference></reference>
+        <cweid>16</cweid>
+        <wascid>15</wascid>
+      </alertitem>
+    </alerts>
+  </site>
+</OWASPZAPReport>

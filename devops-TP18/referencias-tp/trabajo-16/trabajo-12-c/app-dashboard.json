@@ -1,0 +1,80 @@
+{
+  "title": "Sad Paths & Security Events",
+  "uid": "tp12c-security",
+  "tags": [
+    "TP12C",
+    "security",
+    "sad-paths"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Errores HTTP 401/403/500",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(app_requests_total{status=~\"401|403|500\"}[1m])) by (status, endpoint)",
+          "legendFormat": "{{status}} {{endpoint}}"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      }
+    },
+    {
+      "id": 2,
+      "title": "Reinicios de Pods",
+      "type": "gauge",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(changes(kube_pod_container_status_restarts_total{namespace=\"devops-portfolio\"}[15m]))"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      }
+    },
+    {
+      "id": 3,
+      "title": "Errores de Base de Datos",
+      "type": "table",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "increase(app_db_errors_total[1h])",
+          "format": "table"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      }
+    }
+  ]
+}

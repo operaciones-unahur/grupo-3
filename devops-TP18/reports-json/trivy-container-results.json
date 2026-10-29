@@ -1,0 +1,13 @@
+{
+  "SchemaVersion": 2,
+  "Results": [{
+    "Target": "devops-portfolio:latest",
+    "Vulnerabilities": [{
+      "VulnerabilityID": "CVE-2023-9999",
+      "PkgName": "openssl",
+      "InstalledVersion": "1.1.1",
+      "Severity": "HIGH",
+      "Title": "Dummy Test Vulnerability"
+    }]
+  }]
+}

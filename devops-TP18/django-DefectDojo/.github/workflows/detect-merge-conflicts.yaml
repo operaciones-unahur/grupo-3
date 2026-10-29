@@ -1,0 +1,28 @@
+name: "Detect Merge Conflicts"
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - dev
+      - master
+      - release/*
+
+  pull_request_target:
+    types: [synchronize]
+
+jobs:
+  main:
+    # Release PRs and merge-backs are merged without waiting for CI. Skip when the
+    # head is release/merge-* AND the PR has release-management.
+    if: ${{ !(startsWith(github.head_ref, 'release/merge-') && contains(github.event.pull_request.labels.*.name, 'release-management')) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: check if prs are conflicted
+        # we experience a high error rate so we allow this to fail but still have the check become green on the PR
+        continue-on-error: true
+        uses: eps1lon/actions-label-merge-conflict@0273be72a0bbd58fcd71d0d6c02c209b50d1e5e1 # v3.1.0
+        with:
+          dirtyLabel: "conflicts-detected"
+          repoToken: "${{ secrets.GITHUB_TOKEN }}"
+          commentOnDirty: "This pull request has conflicts, please resolve those before we can evaluate the pull request."
+          commentOnClean: "Conflicts have been resolved. A maintainer will review the pull request shortly."

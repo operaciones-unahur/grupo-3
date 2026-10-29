@@ -1,0 +1,566 @@
+
+from unittest.mock import patch
+
+from dojo.engagement.services import copy_engagement, reassign_engagement_product_endpoints
+from dojo.location.models import Location, LocationFindingReference, LocationProductReference
+from dojo.location.status import ProductLocationStatus
+from dojo.models import Endpoint, Endpoint_Status, Engagement, Finding, Product, Test, User
+from dojo.test.services import copy_test
+from dojo.url.models import URL
+
+from .dojo_test_case import DojoTestCase, skip_unless_v2, skip_unless_v3
+
+
+class TestCopyFindingModel(DojoTestCase):
+
+    def test_duplicate_finding_same_test(self):
+        # Set the scene
+        user, _ = User.objects.get_or_create(username="admin")
+        product_type = self.create_product_type("prod_type")
+        product = self.create_product("test_deuplicate_finding", prod_type=product_type)
+        engagement = self.create_engagement("eng", product)
+        test = self.create_test(engagement=engagement, scan_type="NPM Audit Scan", title="test")
+        finding = Finding.objects.create(test=test, reporter=user)
+        # Do the counting
+        current_finding_count = Finding.objects.filter(test=test).count()
+        # Do the copy
+        finding_copy = finding.copy(test=test)
+        # Make sure the copy was made without error
+        self.assertEqual(current_finding_count + 1, Finding.objects.filter(test=test).count())
+        # Are the findings the same
+        self.assertEqual(finding.hash_code, finding_copy.hash_code)
+
+    def test_duplicate_finding_different_test(self):
+        # Set the scene
+        user, _ = User.objects.get_or_create(username="admin")
+        product_type = self.create_product_type("prod_type")
+        product = self.create_product("test_deuplicate_finding", prod_type=product_type)
+        engagement = self.create_engagement("eng", product)
+        test1 = self.create_test(engagement=engagement, scan_type="NPM Audit Scan", title="test1")
+        test2 = self.create_test(engagement=engagement, scan_type="NPM Audit Scan", title="test2")
+        finding = Finding.objects.create(test=test1, reporter=user)
+        # Do the counting
+        engagement_finding_count = Finding.objects.filter(test__engagement=engagement).count()
+        # Do the copy
+        finding_copy = finding.copy(test=test2)
+        # Make sure the copy was made without error
+        self.assertEqual(Finding.objects.filter(test=test1).count(), Finding.objects.filter(test=test2).count())
+        # Are the findings the same
+        self.assertEqual(finding.hash_code, finding_copy.hash_code)
+        # Does the engagement have more findings
+        self.assertEqual(engagement_finding_count + 1, Finding.objects.filter(test__engagement=engagement).count())
+
+    def test_duplicate_finding_with_tags(self):
+        # Set the scene
+        user, _ = User.objects.get_or_create(username="admin")
+        product_type = self.create_product_type("prod_type")
+        product = self.create_product("test_deuplicate_finding", prod_type=product_type)
+        engagement = self.create_engagement("eng", product)
+        test = self.create_test(engagement=engagement, scan_type="NPM Audit Scan", title="test")
+        finding = Finding.objects.create(test=test, reporter=user)
+        finding.unsaved_tags = ["test_tag"]
+        finding.save()
+        # Do the counting
+        current_finding_count = Finding.objects.filter(test=test).count()
+        # Do the copy
+        finding_copy = finding.copy(test=test)
+        # Make sure the copy was made without error
+        self.assertEqual(current_finding_count + 1, Finding.objects.filter(test=test).count())
+        # Do the tags match
+        self.assertEqual(finding.tags, finding_copy.tags)
+
+    def test_duplicate_finding_with_notes(self):
+        # Set the scene
+        user, _ = User.objects.get_or_create(username="admin")
+        product_type = self.create_product_type("prod_type")
+        product = self.create_product("test_deuplicate_finding", prod_type=product_type)
+        engagement = self.create_engagement("eng", product)
+        test = self.create_test(engagement=engagement, scan_type="NPM Audit Scan", title="test")
+        finding = Finding.objects.create(test=test, reporter=user)
+        finding.unsaved_notes = ["test_note"]
+        finding.save()
+        # Do the counting
+        current_finding_count = Finding.objects.filter(test=test).count()
+        # Do the copy
+        finding_copy = finding.copy(test=test)
+        # Make sure the copy was made without error
+        self.assertEqual(current_finding_count + 1, Finding.objects.filter(test=test).count())
+        # Do the notes match
+        self.assertQuerySetEqual(finding.notes.all(), finding_copy.notes.all())
+
+    def test_duplicate_finding_with_tags_and_notes(self):
+        # Set the scene
+        user, _ = User.objects.get_or_create(username="admin")
+        product_type = self.create_product_type("prod_type")
+        product = self.create_product("test_deuplicate_finding", prod_type=product_type)
+        engagement = self.create_engagement("eng", product)
+        test = self.create_test(engagement=engagement, scan_type="NPM Audit Scan", title="test")
+        finding = Finding.objects.create(test=test, reporter=user)
+        finding.unsaved_tags = ["test_tag"]
+        finding.unsaved_notes = ["test_note"]
+        finding.save()
+        # Do the counting
+        current_finding_count = Finding.objects.filter(test=test).count()
+        # Do the copy
+        finding_copy = finding.copy(test=test)
+        # Make sure the copy was made without error
+        self.assertEqual(current_finding_count + 1, Finding.objects.filter(test=test).count())
+        # Do the tags match
+        self.assertEqual(finding.tags, finding_copy.tags)
+        # Do the notes match
+        self.assertQuerySetEqual(finding.notes.all(), finding_copy.notes.all())
+
+    # TODO: Delete this after the move to Locations
+    @skip_unless_v2
+    def test_duplicate_finding_with_endpoints(self):
+        # Set the scene
+        user, _ = User.objects.get_or_create(username="admin")
+        product_type = self.create_product_type("prod_type")
+        product = self.create_product("test_deuplicate_finding", prod_type=product_type)
+        engagement = self.create_engagement("eng", product)
+        test = self.create_test(engagement=engagement, scan_type="NPM Audit Scan", title="test")
+        endpoint = Endpoint.from_uri("0.0.0.0")  # noqa: S104
+        endpoint.save()
+        finding = Finding.objects.create(test=test, reporter=user)
+        endpoint_status = Endpoint_Status.objects.create(finding=finding, endpoint=endpoint)
+        # Do the counting
+        current_finding_count = Finding.objects.filter(test=test).count()
+        current_endpoint_finding_count = endpoint.findings_count
+        current_endpoint_count = Endpoint.objects.all().count()
+        current_endpoint_status_count = Endpoint_Status.objects.filter(endpoint=endpoint).count()
+        # Do the copy
+        finding_copy = finding.copy(test=test)
+        # Make sure the copy was made without error
+        self.assertEqual(current_finding_count + 1, Finding.objects.filter(test=test).count())
+        # Make sure the number of endpoints stayed the same
+        self.assertEqual(current_endpoint_count, Endpoint.objects.all().count())
+        # Make sure the number of findings on the endpoint grew
+        self.assertEqual(current_endpoint_finding_count + 1, endpoint.findings_count)
+        # Make sure the number of endpoint status objects grew
+        self.assertEqual(current_endpoint_status_count + 1, Endpoint_Status.objects.filter(endpoint=endpoint).count())
+        # Make sure the endpoint status objects point at different findings
+        self.assertNotEqual(endpoint_status, finding_copy.status_finding.all().first())
+
+    @skip_unless_v3
+    def test_duplicate_finding_with_locations(self):
+        # Set the scene
+        user, _ = User.objects.get_or_create(username="admin")
+        product_type = self.create_product_type("prod_type")
+        product = self.create_product("test_deuplicate_finding", prod_type=product_type)
+        engagement = self.create_engagement("eng", product)
+        test = self.create_test(engagement=engagement, scan_type="NPM Audit Scan", title="test")
+        finding = Finding.objects.create(test=test, reporter=user)
+        url = URL(host="0.0.0.0")  # noqa: S104
+        url.save()
+        location = url.location
+        location_ref = location.associate_with_finding(finding=finding)
+        # Do the counting
+        current_finding_count = Finding.objects.filter(test=test).count()
+        current_location_finding_count = location.findings.count()
+        current_location_count = Location.objects.all().count()
+        current_location_ref_count = LocationFindingReference.objects.filter(location=location).count()
+        # Do the copy
+        finding_copy = finding.copy(test=test)
+        # Make sure the copy was made without error
+        self.assertEqual(current_finding_count + 1, Finding.objects.filter(test=test).count())
+        # Make sure the number of locations stayed the same
+        self.assertEqual(current_location_count, Location.objects.all().count())
+        # Make sure the number of findings on the location grew
+        self.assertEqual(current_location_finding_count + 1, location.findings.count())
+        # Make sure the number of location status objects grew
+        self.assertEqual(current_location_ref_count + 1, LocationFindingReference.objects.filter(location=location).count())
+        # Make sure the location status objects point at different findings
+        self.assertNotEqual(location_ref, finding_copy.status_finding.all().first())
+
+
+class TestCopyTestModel(DojoTestCase):
+
+    def test_duplicate_test_same_enagagement(self):
+        # Set the scene
+        user, _ = User.objects.get_or_create(username="admin")
+        product_type = self.create_product_type("prod_type")
+        product = self.create_product("test_deuplicate_test", prod_type=product_type)
+        engagement = self.create_engagement("eng", product)
+        test = self.create_test(engagement=engagement, scan_type="NPM Audit Scan", title="test")
+        _ = Finding.objects.create(test=test, reporter=user)
+        # Do the counting
+        current_test_count = Test.objects.filter(engagement=engagement).count()
+        current_test_finding_count = Finding.objects.filter(test=test).count()
+        current_engagement_finding_count = Finding.objects.filter(test__engagement=engagement).count()
+        # Do the copy
+        test_copy = test.copy(engagement=engagement)
+        # Make sure the copy was made without error
+        self.assertEqual(current_test_count + 1, Test.objects.filter(engagement=engagement).count())
+        # Do the tests have the same number of findings
+        self.assertEqual(current_test_finding_count, Finding.objects.filter(test=test_copy).count())
+        # Make sure the engagement has more findings
+        self.assertEqual(current_engagement_finding_count + 1, Finding.objects.filter(test__engagement=engagement).count())
+
+    def test_duplicate_tests_different_engagements(self):
+        # Set the scene
+        user, _ = User.objects.get_or_create(username="admin")
+        product_type = self.create_product_type("prod_type")
+        product = self.create_product("test_deuplicate_test", prod_type=product_type)
+        engagement1 = self.create_engagement("eng1", product)
+        engagement2 = self.create_engagement("eng2", product)
+        test = self.create_test(engagement=engagement1, scan_type="NPM Audit Scan", title="test")
+        _ = Finding.objects.create(test=test, reporter=user)
+        # Do the counting
+        product_finding_count = Finding.objects.filter(test__engagement__product=product).count()
+        # Do the copy
+        test_copy = test.copy(engagement=engagement2)
+        # Make sure the copy was made without error
+        self.assertEqual(Test.objects.filter(engagement=engagement1).count(), Test.objects.filter(engagement=engagement2).count())
+        # Do the enagements have the same number of findings
+        self.assertEqual(Finding.objects.filter(test__engagement=engagement1).count(), Finding.objects.filter(test__engagement=engagement2).count())
+        # Are the tests equal
+        self.assertEqual(test.title, test_copy.title)
+        self.assertEqual(test.scan_type, test_copy.scan_type)
+        self.assertEqual(test.test_type, test_copy.test_type)
+        # Does the product thave more findings
+        self.assertEqual(product_finding_count + 1, Finding.objects.filter(test__engagement__product=product).count())
+
+    def test_duplicate_test_with_tags(self):
+        # Set the scene
+        user, _ = User.objects.get_or_create(username="admin")
+        product_type = self.create_product_type("prod_type")
+        product = self.create_product("test_deuplicate_test", prod_type=product_type)
+        engagement = self.create_engagement("eng", product)
+        test = self.create_test(engagement=engagement, scan_type="NPM Audit Scan", title="test")
+        _ = Finding.objects.create(test=test, reporter=user)
+        test.unsaved_tags = ["test_tag"]
+        test.save()
+        # Do the counting
+        current_test_count = Test.objects.filter(engagement=engagement).count()
+        # Do the copy
+        test_copy = test.copy(engagement=engagement)
+        # Make sure the copy was made without error
+        self.assertEqual(current_test_count + 1, Test.objects.filter(engagement=engagement).count())
+        # Do the tags match
+        self.assertEqual(test.tags, test_copy.tags)
+
+    def test_duplicate_test_with_notes(self):
+        # Set the scene
+        user, _ = User.objects.get_or_create(username="admin")
+        product_type = self.create_product_type("prod_type")
+        product = self.create_product("test_deuplicate_test", prod_type=product_type)
+        engagement = self.create_engagement("eng", product)
+        test = self.create_test(engagement=engagement, scan_type="NPM Audit Scan", title="test")
+        _ = Finding.objects.create(test=test, reporter=user)
+        test.unsaved_notes = ["test_note"]
+        test.save()
+        # Do the counting
+        current_test_count = Test.objects.filter(engagement=engagement).count()
+        # Do the copy
+        test_copy = test.copy(engagement=engagement)
+        # Make sure the copy was made without error
+        self.assertEqual(current_test_count + 1, Test.objects.filter(engagement=engagement).count())
+        # Do the notes match
+        self.assertQuerySetEqual(test.notes.all(), test_copy.notes.all())
+
+    def test_duplicate_test_with_tags_and_notes(self):
+        # Set the scene
+        user, _ = User.objects.get_or_create(username="admin")
+        product_type = self.create_product_type("prod_type")
+        product = self.create_product("test_deuplicate_test", prod_type=product_type)
+        engagement = self.create_engagement("eng", product)
+        test = self.create_test(engagement=engagement, scan_type="NPM Audit Scan", title="test")
+        _ = Finding.objects.create(test=test, reporter=user)
+        test.unsaved_tags = ["test_tag"]
+        test.unsaved_notes = ["test_note"]
+        test.save()
+        # Do the counting
+        current_test_count = Test.objects.filter(engagement=engagement).count()
+        # Do the copy
+        test_copy = test.copy(engagement=engagement)
+        # Make sure the copy was made without error
+        self.assertEqual(current_test_count + 1, Test.objects.filter(engagement=engagement).count())
+        # Do the notes match
+        self.assertQuerySetEqual(test.notes.all(), test_copy.notes.all())
+        # Do the tags match
+        self.assertEqual(test.tags, test_copy.tags)
+
+
+class TestCopyTestService(DojoTestCase):
+
+    """Phase 2: the copy_test service holds the copy workflow extracted from the UI view."""
+
+    @patch("dojo.test.services.create_notification")
+    @patch("dojo.test.services.schedule_product_grade")
+    def test_copy_test_service(self, mock_dispatch, mock_notification):
+        user, _ = User.objects.get_or_create(username="admin")
+        product_type = self.create_product_type("svc_pt_test")
+        product = self.create_product("svc_copy_test_product", prod_type=product_type)
+        engagement = self.create_engagement("svc_eng_test", product)
+        test = self.create_test(engagement=engagement, scan_type="NPM Audit Scan", title="test")
+        _ = Finding.objects.create(test=test, reporter=user)
+        before_tests = Test.objects.filter(engagement=engagement).count()
+        before_findings = Finding.objects.filter(test__engagement=engagement).count()
+        # Run the service (copy into the same engagement)
+        test_copy = copy_test(test, engagement, user)
+        # A new test was created under the engagement, with its findings
+        self.assertEqual(before_tests + 1, Test.objects.filter(engagement=engagement).count())
+        self.assertNotEqual(test.id, test_copy.id)
+        self.assertEqual(engagement, test_copy.engagement)
+        self.assertEqual(before_findings + 1, Finding.objects.filter(test__engagement=engagement).count())
+        # Side effects: grade recalculation dispatched and a notification raised
+        mock_dispatch.assert_called_once()
+        mock_notification.assert_called_once()
+        self.assertEqual(mock_notification.call_args.kwargs["event"], "test_copied")
+
+
+class TestCopyEngagementModel(DojoTestCase):
+
+    def test_duplicate_engagement(self):
+        # Set the scene
+        user, _ = User.objects.get_or_create(username="admin")
+        product_type = self.create_product_type("prod_type")
+        product = self.create_product("test_deuplicate_test", prod_type=product_type)
+        engagement = self.create_engagement("eng", product)
+        test = self.create_test(engagement=engagement, scan_type="NPM Audit Scan", title="test")
+        _ = Finding.objects.create(test=test, reporter=user)
+        # Do the counting
+        current_product_count = Product.objects.filter(prod_type=product_type).count()
+        current_engagement_finding_count = Finding.objects.filter(test__engagement=engagement).count()
+        current_engagement_product_finding_count = Finding.objects.filter(test__engagement__product=product).count()
+        # Do the copy
+        engagement_copy = engagement.copy()
+        # Make sure the copy was made without error
+        self.assertEqual(current_product_count + 1, Engagement.objects.filter(product=product).count())
+        # Do the tests have the same number of findings
+        self.assertEqual(current_engagement_finding_count, Finding.objects.filter(test__engagement=engagement_copy).count())
+        # Make sure the product has more findings
+        self.assertEqual(current_engagement_product_finding_count + 1, Finding.objects.filter(test__engagement__product=product).count())
+
+    def test_duplicate_engagement_with_tags(self):
+        # Set the scene
+        user, _ = User.objects.get_or_create(username="admin")
+        product_type = self.create_product_type("prod_type")
+        product = self.create_product("test_deuplicate_test", prod_type=product_type)
+        engagement = self.create_engagement("eng", product)
+        test = self.create_test(engagement=engagement, scan_type="NPM Audit Scan", title="test")
+        _ = Finding.objects.create(test=test, reporter=user)
+        engagement.unsaved_tags = ["test_tag"]
+        engagement.save()
+        # Do the counting
+        current_engagement_count = Engagement.objects.filter(product=product).count()
+        # Do the copy
+        engagement_copy = engagement.copy()
+        # Make sure the copy was made without error
+        self.assertEqual(current_engagement_count + 1, Engagement.objects.filter(product=product).count())
+        # Do the tags match
+        self.assertEqual(engagement.tags, engagement_copy.tags)
+
+    def test_duplicate_engagement_with_notes(self):
+        # Set the scene
+        user, _ = User.objects.get_or_create(username="admin")
+        product_type = self.create_product_type("prod_type")
+        product = self.create_product("test_deuplicate_test", prod_type=product_type)
+        engagement = self.create_engagement("eng", product)
+        test = self.create_test(engagement=engagement, scan_type="NPM Audit Scan", title="test")
+        _ = Finding.objects.create(test=test, reporter=user)
+        engagement.unsaved_notes = ["test_note"]
+        engagement.save()
+        # Do the counting
+        current_engagement_count = Engagement.objects.filter(product=product).count()
+        # Do the copy
+        engagement_copy = engagement.copy()
+        # Make sure the copy was made without error
+        self.assertEqual(current_engagement_count + 1, Engagement.objects.filter(product=product).count())
+        # Do the notes match
+        self.assertQuerySetEqual(engagement.notes.all(), engagement_copy.notes.all())
+
+    def test_duplicate_engagement_with_tags_and_notes(self):
+        # Set the scene
+        user, _ = User.objects.get_or_create(username="admin")
+        product_type = self.create_product_type("prod_type")
+        product = self.create_product("test_deuplicate_test", prod_type=product_type)
+        engagement = self.create_engagement("eng", product)
+        test = self.create_test(engagement=engagement, scan_type="NPM Audit Scan", title="test")
+        _ = Finding.objects.create(test=test, reporter=user)
+        engagement.unsaved_tags = ["test_tag"]
+        engagement.unsaved_notes = ["test_note"]
+        engagement.save()
+        # Do the counting
+        current_engagement_count = Engagement.objects.filter(product=product).count()
+        # Do the copy
+        engagement_copy = engagement.copy()
+        # Make sure the copy was made without error
+        self.assertEqual(current_engagement_count + 1, Engagement.objects.filter(product=product).count())
+        # Do the notes match
+        self.assertQuerySetEqual(engagement.notes.all(), engagement_copy.notes.all())
+        # Do the tags match
+        self.assertEqual(engagement.tags, engagement_copy.tags)
+
+
+class TestCopyEngagementService(DojoTestCase):
+
+    """Phase 2: the copy_engagement service holds the copy workflow extracted from the UI view."""
+
+    @patch("dojo.engagement.services.create_notification")
+    @patch("dojo.engagement.services.schedule_product_grade")
+    def test_copy_engagement_service(self, mock_dispatch, mock_notification):
+        user, _ = User.objects.get_or_create(username="admin")
+        product_type = self.create_product_type("svc_prod_type")
+        product = self.create_product("svc_copy_product", prod_type=product_type)
+        engagement = self.create_engagement("svc_eng", product)
+        test = self.create_test(engagement=engagement, scan_type="NPM Audit Scan", title="test")
+        _ = Finding.objects.create(test=test, reporter=user)
+        before = Engagement.objects.filter(product=product).count()
+        before_findings = Finding.objects.filter(test__engagement__product=product).count()
+        # Run the service
+        engagement_copy = copy_engagement(engagement, user)
+        # A new engagement was created under the same product
+        self.assertEqual(before + 1, Engagement.objects.filter(product=product).count())
+        self.assertNotEqual(engagement.id, engagement_copy.id)
+        self.assertEqual(product, engagement_copy.product)
+        # Findings were duplicated along with the engagement
+        self.assertEqual(before_findings + 1, Finding.objects.filter(test__engagement__product=product).count())
+        # Side effects: grade recalculation dispatched and a notification raised
+        mock_dispatch.assert_called_once()
+        mock_notification.assert_called_once()
+        self.assertEqual(mock_notification.call_args.kwargs["event"], "engagement_copied")
+
+
+class TestCopyFindingCrossProduct(DojoTestCase):
+
+    """
+    Copying a finding into a test in a different product must re-home the finding's
+    endpoints/locations onto the destination product, not leave them pointing at the
+    source product.
+    """
+
+    def _two_products(self):
+        user, _ = User.objects.get_or_create(username="admin")
+        product_type = self.create_product_type("xprod_type")
+        product_a = self.create_product("xprod_a", prod_type=product_type)
+        product_b = self.create_product("xprod_b", prod_type=product_type)
+        engagement_a = self.create_engagement("xeng_a", product_a)
+        engagement_b = self.create_engagement("xeng_b", product_b)
+        test_a = self.create_test(engagement=engagement_a, scan_type="NPM Audit Scan", title="test_a")
+        test_b = self.create_test(engagement=engagement_b, scan_type="NPM Audit Scan", title="test_b")
+        return user, product_a, product_b, test_a, test_b
+
+    # TODO: Delete this after the move to Locations
+    @skip_unless_v2
+    def test_copy_finding_to_other_product_rehomes_endpoint(self):
+        user, product_a, product_b, test_a, test_b = self._two_products()
+        endpoint = Endpoint.from_uri("host-a.example.com")
+        endpoint.product = product_a
+        endpoint.save()
+        finding = Finding.objects.create(test=test_a, reporter=user)
+        Endpoint_Status.objects.create(finding=finding, endpoint=endpoint)
+        # Copy the finding into product B's test
+        finding_copy = finding.copy(test=test_b)
+        # The copied finding's endpoint must belong to the destination product
+        copied_status = finding_copy.status_finding.all().first()
+        self.assertIsNotNone(copied_status)
+        self.assertEqual(product_b, copied_status.endpoint.product)
+        # The original endpoint (and finding) is untouched
+        endpoint.refresh_from_db()
+        self.assertEqual(product_a, endpoint.product)
+
+    @skip_unless_v3
+    def test_copy_finding_to_other_product_rehomes_location(self):
+        user, product_a, product_b, test_a, test_b = self._two_products()
+        finding = Finding.objects.create(test=test_a, reporter=user)
+        url = URL(host="host-a.example.com")
+        url.save()
+        location = url.location
+        location.associate_with_finding(finding=finding)
+        # Sanity: the location is associated with product A only
+        self.assertTrue(LocationProductReference.objects.filter(location=location, product=product_a).exists())
+        self.assertFalse(LocationProductReference.objects.filter(location=location, product=product_b).exists())
+        # Copy the finding into product B's test
+        finding.copy(test=test_b)
+        # The shared location is now also associated with the destination product
+        self.assertTrue(LocationProductReference.objects.filter(location=location, product=product_b).exists())
+
+
+class TestMoveEngagementProduct(DojoTestCase):
+
+    """
+    Moving an engagement to a different product must re-home the endpoints/locations of
+    that engagement's findings onto the new product.
+    """
+
+    def _setup(self):
+        user, _ = User.objects.get_or_create(username="admin")
+        product_type = self.create_product_type("mv_prod_type")
+        product_a = self.create_product("mv_prod_a", prod_type=product_type)
+        product_b = self.create_product("mv_prod_b", prod_type=product_type)
+        engagement = self.create_engagement("mv_eng", product_a)
+        test = self.create_test(engagement=engagement, scan_type="NPM Audit Scan", title="mv_test")
+        finding = Finding.objects.create(test=test, reporter=user)
+        return user, product_a, product_b, engagement, finding
+
+    def _move(self, engagement, old_product, new_product):
+        engagement.product = new_product
+        engagement.save()
+        reassign_engagement_product_endpoints(engagement, old_product, new_product)
+
+    # TODO: Delete this after the move to Locations
+    @skip_unless_v2
+    def test_move_engagement_rehomes_endpoints(self):
+        _user, product_a, product_b, engagement, finding = self._setup()
+        endpoint = Endpoint.from_uri("host-a.example.com")
+        endpoint.product = product_a
+        endpoint.save()
+        endpoint_status = Endpoint_Status.objects.create(finding=finding, endpoint=endpoint)
+        # Move the engagement to product B
+        self._move(engagement, product_a, product_b)
+        # The finding's endpoint status now points at an endpoint in the new product
+        endpoint_status.refresh_from_db()
+        self.assertEqual(product_b, endpoint_status.endpoint.product)
+
+    @skip_unless_v3
+    def test_move_engagement_rehomes_locations(self):
+        _user, product_a, product_b, engagement, finding = self._setup()
+        url = URL(host="host-a.example.com")
+        url.save()
+        location = url.location
+        location.associate_with_finding(finding=finding)
+        self.assertTrue(LocationProductReference.objects.filter(location=location, product=product_a).exists())
+        # Move the engagement to product B
+        self._move(engagement, product_a, product_b)
+        # The location is now associated with the new product, and the stale
+        # old-product association is removed since no finding there references it
+        self.assertTrue(LocationProductReference.objects.filter(location=location, product=product_b).exists())
+        self.assertFalse(LocationProductReference.objects.filter(location=location, product=product_a).exists())
+
+    @patch("dojo.engagement.services.schedule_product_grade")
+    def test_move_engagement_recomputes_grade_for_both_products(self, mock_schedule):
+        # Moving findings between products changes both products' aggregate grade, so the
+        # move must recompute the grade for the source and destination product.
+        _user, product_a, product_b, engagement, _finding = self._setup()
+        self._move(engagement, product_a, product_b)
+        graded_product_ids = {call.args[0] for call in mock_schedule.call_args_list}
+        self.assertIn(product_a.id, graded_product_ids)
+        self.assertIn(product_b.id, graded_product_ids)
+
+    @skip_unless_v3
+    def test_move_engagement_reassesses_shared_old_product_location_status(self):
+        # A location shared with another finding that stays in the old product must keep
+        # its old-product association, but its status must be reassessed: moving the only
+        # active finding out flips the old product's location status to Mitigated.
+        user, product_a, product_b, engagement, active_finding = self._setup()
+        # A second, mitigated finding in the old product (different engagement) sharing the location
+        other_engagement = self.create_engagement("mv_eng_other", product_a)
+        other_test = self.create_test(engagement=other_engagement, scan_type="NPM Audit Scan", title="mv_test2")
+        mitigated_finding = Finding.objects.create(test=other_test, reporter=user, active=False, is_mitigated=True)
+        url = URL(host="host-a.example.com")
+        url.save()
+        location = url.location
+        location.associate_with_finding(finding=active_finding)
+        location.associate_with_finding(finding=mitigated_finding)
+        # Before the move the old product's location status is Active (the active finding)
+        old_ref = LocationProductReference.objects.get(location=location, product=product_a)
+        self.assertEqual(ProductLocationStatus.Active, old_ref.status)
+        # Move the engagement holding the active finding to product B
+        self._move(engagement, product_a, product_b)
+        # Old product keeps the association (mitigated finding still references it) but is reassessed
+        old_ref.refresh_from_db()
+        self.assertEqual(ProductLocationStatus.Mitigated, old_ref.status)
+        # New product now carries the active status
+        new_ref = LocationProductReference.objects.get(location=location, product=product_b)
+        self.assertEqual(ProductLocationStatus.Active, new_ref.status)

@@ -1,0 +1,156 @@
+from functools import partial
+
+from django.db.models import OuterRef, Value
+from django.db.models.functions import Coalesce
+from django_filters.rest_framework import DjangoFilterBackend
+from drf_spectacular.utils import extend_schema, extend_schema_view
+from rest_framework import mixins, status, viewsets
+from rest_framework.decorators import action
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+
+import dojo.api_v2.mixins as dojo_mixins
+from dojo.api_v2 import prefetch
+from dojo.api_v2.serializers import ReportGenerateOptionSerializer, ReportGenerateSerializer
+from dojo.api_v2.views import DeprecationNoticeMixin, PrefetchDojoModelViewSet, report_generate, schema_with_prefetch
+from dojo.asset.api import serializers
+from dojo.asset.api.filters import (
+    ApiAssetFilter,
+    AssetAPIScanConfigurationFilterSet,
+)
+from dojo.authorization import api_permissions as permissions
+from dojo.models import (
+    Finding,
+    Product,
+    Product_API_Scan_Configuration,
+)
+from dojo.product.queries import (
+    get_authorized_product_api_scan_configurations,
+    get_authorized_products,
+)
+from dojo.query_utils import build_count_subquery
+from dojo.utils import async_delete, get_setting
+
+
+# Authorization: object-based
+@extend_schema_view(**schema_with_prefetch())
+class AssetAPIScanConfigurationViewSet(
+    DeprecationNoticeMixin,
+    PrefetchDojoModelViewSet,
+):
+    deprecation = "api_scan_configuration"
+    serializer_class = serializers.AssetAPIScanConfigurationSerializer
+    queryset = Product_API_Scan_Configuration.objects.none()
+    filter_backends = (DjangoFilterBackend,)
+    filterset_class = AssetAPIScanConfigurationFilterSet
+    permission_classes = (
+        IsAuthenticated,
+        permissions.UserHasAssetAPIScanConfigurationPermission,
+    )
+
+    def get_queryset(self):
+        return get_authorized_product_api_scan_configurations(
+            "view",
+        )
+
+
+@extend_schema_view(**schema_with_prefetch())
+class AssetViewSet(
+    prefetch.PrefetchListMixin,
+    prefetch.PrefetchRetrieveMixin,
+    mixins.CreateModelMixin,
+    mixins.DestroyModelMixin,
+    mixins.UpdateModelMixin,
+    viewsets.GenericViewSet,
+    dojo_mixins.DeletePreviewModelMixin,
+):
+    serializer_class = serializers.AssetSerializer
+    queryset = Product.objects.none()
+    filter_backends = (DjangoFilterBackend,)
+    filterset_class = ApiAssetFilter
+    permission_classes = (
+        IsAuthenticated,
+        permissions.UserHasAssetPermission,
+    )
+
+    def get_queryset(self):
+        base_findings = Finding.objects.filter(
+            test__engagement__product_id=OuterRef("pk"),
+        )
+        count_subquery = partial(
+            build_count_subquery,
+            group_field="test__engagement__product_id",
+        )
+        return (
+            get_authorized_products("view")
+            .select_related(
+                "platform",
+                "lifecycle",
+                "origin",
+            )
+            .prefetch_related(
+                "tags",
+                "product_meta",
+                "authorized_users",
+                "regulations",
+            )
+            .annotate(
+                active_finding_count=Coalesce(
+                    count_subquery(base_findings.filter(active=True)),
+                    Value(0),
+                ),
+            )
+            .distinct()
+        )
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if get_setting("ASYNC_OBJECT_DELETE"):
+            async_del = async_delete()
+            async_del.delete(instance)
+        else:
+            instance.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    # def list(self, request):
+    #     # Note the use of `get_queryset()` instead of `self.queryset`
+    #     queryset = self.get_queryset()
+    #     serializer = self.serializer_class(queryset, many=True)
+    #     return Response(serializer.data)
+
+    @extend_schema(
+        request=ReportGenerateOptionSerializer,
+        responses={status.HTTP_200_OK: ReportGenerateSerializer},
+    )
+    @action(
+        detail=True, methods=["post"], permission_classes=[IsAuthenticated],
+    )
+    def generate_report(self, request, pk=None):
+        product = self.get_object()
+
+        options = {}
+        # prepare post data
+        report_options = ReportGenerateOptionSerializer(
+            data=request.data,
+        )
+        if report_options.is_valid():
+            options["include_finding_notes"] = report_options.validated_data[
+                "include_finding_notes"
+            ]
+            options["include_finding_images"] = report_options.validated_data[
+                "include_finding_images"
+            ]
+            options[
+                "include_executive_summary"
+            ] = report_options.validated_data["include_executive_summary"]
+            options[
+                "include_table_of_contents"
+            ] = report_options.validated_data["include_table_of_contents"]
+        else:
+            return Response(
+                report_options.errors, status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        data = report_generate(request, product, options)
+        report = ReportGenerateSerializer(data)
+        return Response(report.data)

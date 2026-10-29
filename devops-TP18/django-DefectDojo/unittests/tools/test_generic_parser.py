@@ -1,0 +1,935 @@
+import datetime
+
+from dojo.finding.cwe import finding_cwe_labels
+from dojo.models import Engagement, Finding, Product, Test
+from dojo.tools.generic.parser import GenericParser
+from unittests.dojo_test_case import DojoTestCase, get_unit_tests_scans_path
+
+
+class TestFile:
+
+    def read(self):
+        return self.content
+
+    def __init__(self, name, content):
+        self.name = name
+        self.content = content
+
+
+class TestGenericParser(DojoTestCase):
+
+    def setUp(self):
+        self.product = Product(name="sample product",
+                               description="what a description")
+        self.engagement = Engagement(name="sample engagement",
+                                     product=self.product)
+        self.test = Test(engagement=self.engagement)
+
+    def test_parse_report1(self):
+        with (get_unit_tests_scans_path("generic") / "generic_report1.csv").open(encoding="utf-8") as file:
+            parser = GenericParser()
+            findings = parser.get_findings(file, self.test)
+            self.validate_locations(findings)
+            self.assertEqual(1, len(findings))
+            finding = findings[0]
+            self.assertEqual(5, len(self.get_unsaved_locations(finding)))
+            location = self.get_unsaved_locations(finding)[0]
+            self.assertEqual("vulnerable.endpoint.com", location.host)
+            self.assertEqual(443, location.port)
+            self.assertEqual("resource1/asdf", location.path)
+            location = self.get_unsaved_locations(finding)[1]
+            self.assertEqual("vulnerable.endpoint.com", location.host)
+            self.assertEqual(443, location.port)
+            self.assertEqual("resource2/qwerty", location.path)
+            self.assertEqual("https", location.protocol)
+
+    def test_parse_no_csv_content_no_findings(self):
+        findings = ""
+        file = TestFile("findings.csv", findings)
+        parser = GenericParser()
+        findings = parser.get_findings(file, self.test)
+        self.assertEqual(0, len(findings))
+
+    def test_parse_csv_with_only_headers_results_in_no_findings(self):
+        content = "Date,Title,CweId,Url,Severity,Description,Mitigation,Impact,References,Active,Verified"
+        file = TestFile("findings.csv", content)
+        parser = GenericParser()
+        findings = parser.get_findings(file, self.test)
+        self.assertEqual(0, len(findings))
+
+    def test_parse_csv_with_single_vulnerability_results_in_single_finding(
+            self):
+        content = """Date,Title,CweId,Url,Severity,Description,Mitigation,Impact,References,Active,Verified
+11/7/16,Potential XSS Vulnerability,79,,High,"FileName: default.aspx.cs
+Description: Potential XSS Vulnerability
+Line:18
+Code Line: Response.Write(output);",None,,,TRUE,FALSE
+"""
+        file = TestFile("findings.csv", content)
+        parser = GenericParser()
+        findings = parser.get_findings(file, self.test)
+        self.assertEqual(1, len(findings))
+        self.validate_locations(findings)
+
+    def test_parse_csv_with_multiple_vulnerabilities_results_in_multiple_findings(
+            self):
+        content = """Date,Title,CweId,Url,Severity,Description,Mitigation,Impact,References,Active,Verified
+11/7/16,Potential XSS Vulnerability,79,,High,"FileName: default.aspx.cs
+Description: Potential XSS Vulnerability
+Line:18
+Code Line: Response.Write(output);",None,,,TRUE,FALSE
+11/7/16,Potential SQL Injection,112,,High,"FileName: UserData.cs
+Description: Potential SQL Injection Vulnerability
+Line:42
+Code Line: strSQL=""SELECT * FROM users WHERE user_id="" + request_user_id",None,,,TRUE,FALSE
+"""
+        file = TestFile("findings.csv", content)
+        parser = GenericParser()
+        findings = parser.get_findings(file, self.test)
+        self.assertEqual(2, len(findings))
+        self.validate_locations(findings)
+
+    def test_parse_csv_with_duplicates_results_in_single_findings(self):
+        content = """Date,Title,CweId,Url,Severity,Description,Mitigation,Impact,References,Active,Verified
+11/7/16,Potential XSS Vulnerability,79,,High,"FileName: default.aspx.cs
+Description: Potential XSS Vulnerability
+Line:18
+Code Line: Response.Write(output);",None,,,TRUE,FALSE
+11/7/16,Potential XSS Vulnerability,79,,High,"FileName: default.aspx.cs
+Description: Potential XSS Vulnerability
+Line:18
+Code Line: Response.Write(output);",None,,,TRUE,FALSE
+"""
+        file = TestFile("findings.csv", content)
+        parser = GenericParser()
+        findings = parser.get_findings(file, self.test)
+        self.assertEqual(1, len(findings))
+        self.validate_locations(findings)
+
+    def test_parsed_finding_has_date(self):
+        content = """Date,Title,CweId,Url,Severity,Description,Mitigation,Impact,References,Active,Verified
+11/7/2015,Potential XSS Vulnerability,79,,High,"FileName: default.aspx.cs
+Description: Potential XSS Vulnerability
+Line:18
+Code Line: Response.Write(output);",None,,,TRUE,FALSE
+"""
+        file = TestFile("findings.csv", content)
+        parser = GenericParser()
+        findings = parser.get_findings(file, self.test)
+        self.assertEqual(datetime.date(2015, 11, 7), findings[0].date)
+        self.validate_locations(findings)
+
+    def test_parsed_finding_has_title(self):
+        content = """Date,Title,CweId,Url,Severity,Description,Mitigation,Impact,References,Active,Verified
+11/7/2015,Potential XSS Vulnerability,79,,High,"FileName: default.aspx.cs
+Description: Potential XSS Vulnerability
+Line:18
+Code Line: Response.Write(output);",None,,,TRUE,FALSE
+"""
+        file = TestFile("findings.csv", content)
+        parser = GenericParser()
+        findings = parser.get_findings(file, self.test)
+        self.validate_locations(findings)
+        self.assertEqual("Potential XSS Vulnerability",
+                         findings[0].title)
+
+    def test_parsed_finding_has_cve(self):
+        content = """Date,Title,CweId,Url,Severity,Description,Mitigation,Impact,References,Active,Verified,CVE
+11/7/2015,Potential XSS Vulnerability,79,,High,"FileName: default.aspx.cs
+Description: Potential XSS Vulnerability
+Line:18
+Code Line: Response.Write(output);",None,,,TRUE,FALSE,CVE-2021-26919
+"""
+        file = TestFile("findings.csv", content)
+        parser = GenericParser()
+        findings = parser.get_findings(file, self.test)
+        self.validate_locations(findings)
+        self.assertEqual(1, len(findings[0].unsaved_vulnerability_ids))
+        self.assertEqual("CVE-2021-26919", findings[0].unsaved_vulnerability_ids[0])
+
+    def test_parsed_finding_has_cwe(self):
+        content = """Date,Title,CweId,Url,Severity,Description,Mitigation,Impact,References,Active,Verified
+11/7/2015,Potential XSS Vulnerability,79,,High,"FileName: default.aspx.cs
+Description: Potential XSS Vulnerability
+Line:18
+Code Line: Response.Write(output);",None,,,TRUE,FALSE
+"""
+        file = TestFile("findings.csv", content)
+        parser = GenericParser()
+        findings = parser.get_findings(file, self.test)
+        self.validate_locations(findings)
+        self.assertEqual(79, findings[0].cwe)
+
+    def test_parsed_finding_has_url(self):
+        """Test url management as an EndPoint"""
+        content = """Date,Title,CweId,Url,Severity,Description,Mitigation,Impact,References,Active,Verified
+11/7/2015,Potential XSS Vulnerability,79,"http://localhost/default.aspx",High,"FileName: default.aspx.cs
+Description: Potential XSS Vulnerability
+Line:18
+Code Line: Response.Write(output);",None,,,TRUE,FALSE
+"""
+        file = TestFile("findings.csv", content)
+        parser = GenericParser()
+        findings = parser.get_findings(file, self.test)
+        for finding in findings:
+            finding.clean()
+        self.validate_locations(findings)
+        self.assertEqual(1, len(findings))
+        finding = findings[0]
+        self.assertEqual(1, len(self.get_unsaved_locations(finding)))
+        location = self.get_unsaved_locations(finding)[0]
+        self.assertEqual("localhost", location.host)
+        self.assertEqual(80, location.port)
+        self.assertEqual("http", location.protocol)
+        self.assertEqual("default.aspx", location.path)
+        self.assertFalse(location.query)
+        self.assertFalse(location.fragment)
+        self.assertEqual(True, finding.active)
+        self.assertEqual(False, finding.verified)
+
+    def test_parsed_finding_has_severity(self):
+        content = """Date,Title,CweId,Url,Severity,Description,Mitigation,Impact,References,Active,Verified
+11/7/2015,Potential XSS Vulnerability,79,"http://localhost/default.aspx",High,"FileName: default.aspx.cs
+Description: Potential XSS Vulnerability
+Line:18
+Code Line: Response.Write(output);",None,,,TRUE,FALSE
+"""
+        file = TestFile("findings.csv", content)
+        parser = GenericParser()
+        findings = parser.get_findings(file, self.test)
+        self.validate_locations(findings)
+        self.assertEqual("High", findings[0].severity)
+
+    def test_parsed_finding_with_invalid_severity_has_info_severity(self):
+        content = """Date,Title,CweId,Url,Severity,Description,Mitigation,Impact,References,Active,Verified
+11/7/2015,Potential XSS Vulnerability,79,"http://localhost/default.aspx",Unknown,"FileName: default.aspx.cs
+Description: Potential XSS Vulnerability
+Line:18
+Code Line: Response.Write(output);",None,,,TRUE,FALSE
+"""
+        file = TestFile("findings.csv", content)
+        parser = GenericParser()
+        findings = parser.get_findings(file, self.test)
+        self.validate_locations(findings)
+        self.assertEqual("Info", findings[0].severity)
+
+    def test_parsed_finding_has_description(self):
+        content = """Date,Title,CweId,Url,Severity,Description,Mitigation,Impact,References,Active,Verified
+11/7/2015,Potential XSS Vulnerability,79,"http://localhost/default.aspx",High,"FileName: default.aspx.cs
+Description: Potential XSS Vulnerability
+Line:18
+Code Line: Response.Write(output);",None,,,TRUE,FALSE
+"""
+        file = TestFile("findings.csv", content)
+        parser = GenericParser()
+        findings = parser.get_findings(file, self.test)
+        self.validate_locations(findings)
+        self.assertEqual(
+            "FileName: default.aspx.cs\nDescription: Potential XSS Vulnerability\nLine:18\nCode Line: Response.Write(output);",
+            findings[0].description)
+
+    def test_parsed_finding_has_mitigation(self):
+        content = """Date,Title,CweId,Url,Severity,Description,Mitigation,Impact,References,Active,Verified
+11/7/2015,Potential XSS Vulnerability,79,"http://localhost/default.aspx",High,"FileName: default.aspx.cs
+Description: Potential XSS Vulnerability
+Line:18
+Code Line: Response.Write(output);","None Currently Available",,,TRUE,FALSE
+"""
+        file = TestFile("findings.csv", content)
+        parser = GenericParser()
+        findings = parser.get_findings(file, self.test)
+        self.validate_locations(findings)
+        self.assertEqual("None Currently Available",
+                         findings[0].mitigation)
+
+    def test_parsed_finding_has_impact(self):
+        content = """Date,Title,CweId,Url,Severity,Description,Mitigation,Impact,References,Active,Verified
+11/7/2015,Potential XSS Vulnerability,79,"http://localhost/default.aspx",High,"FileName: default.aspx.cs
+Description: Potential XSS Vulnerability
+Line:18
+Code Line: Response.Write(output);","None Currently Available","Impact is currently unknown",,TRUE,FALSE
+"""
+        file = TestFile("findings.csv", content)
+        parser = GenericParser()
+        findings = parser.get_findings(file, self.test)
+        self.validate_locations(findings)
+        self.assertEqual("Impact is currently unknown",
+                         findings[0].impact)
+
+    def test_parsed_finding_has_references(self):
+        content = """Date,Title,CweId,Url,Severity,Description,Mitigation,Impact,References,Active,Verified
+11/7/2015,Potential XSS Vulnerability,79,"http://localhost/default.aspx",High,"FileName: default.aspx.cs
+Description: Potential XSS Vulnerability
+Line:18
+Code Line: Response.Write(output);","None Currently Available","Impact is currently unknown","Finding has references.",TRUE,FALSE
+"""
+        file = TestFile("findings.csv", content)
+        parser = GenericParser()
+        findings = parser.get_findings(file, self.test)
+        self.validate_locations(findings)
+        self.assertEqual("Finding has references.", findings[0].references)
+
+    def test_parsed_finding_has_positive_active_status(self):
+        content = """Date,Title,CweId,Url,Severity,Description,Mitigation,Impact,References,Active,Verified
+11/7/2015,Potential XSS Vulnerability,79,"http://localhost/default.aspx",High,"FileName: default.aspx.cs
+Description: Potential XSS Vulnerability
+Line:18
+Code Line: Response.Write(output);","None Currently Available","Impact is currently unknown","Finding has references.",TRUE,FALSE
+"""
+        file = TestFile("findings.csv", content)
+        parser = GenericParser()
+        findings = parser.get_findings(file, self.test)
+        self.validate_locations(findings)
+        self.assertEqual(True, findings[0].active)
+
+    def test_parsed_finding_has_negative_active_status(self):
+        content = """Date,Title,CweId,Url,Severity,Description,Mitigation,Impact,References,Active,Verified
+11/7/2015,Potential XSS Vulnerability,79,"http://localhost/default.aspx",High,"FileName: default.aspx.cs
+Description: Potential XSS Vulnerability
+Line:18
+Code Line: Response.Write(output);","None Currently Available","Impact is currently unknown","Finding has references.",FALSE,FALSE
+"""
+        file = TestFile("findings.csv", content)
+        parser = GenericParser()
+        findings = parser.get_findings(file, self.test)
+        self.validate_locations(findings)
+        self.assertEqual(False, findings[0].active)
+
+    def test_parsed_finding_has_positive_verified_status(self):
+        content = """Date,Title,CweId,Url,Severity,Description,Mitigation,Impact,References,Active,Verified
+11/7/2015,Potential XSS Vulnerability,79,"http://localhost/default.aspx",High,"FileName: default.aspx.cs
+Description: Potential XSS Vulnerability
+Line:18
+Code Line: Response.Write(output);","None Currently Available","Impact is currently unknown","Finding has references.",FALSE,TRUE
+"""
+        file = TestFile("findings.csv", content)
+        parser = GenericParser()
+        findings = parser.get_findings(file, self.test)
+        self.validate_locations(findings)
+        self.assertEqual(True, findings[0].verified)
+
+    def test_parsed_finding_has_negative_verified_status(self):
+        content = """Date,Title,CweId,Url,Severity,Description,Mitigation,Impact,References,Active,Verified
+11/7/2015,Potential XSS Vulnerability,79,"http://localhost/default.aspx",High,"FileName: default.aspx.cs
+Description: Potential XSS Vulnerability
+Line:18
+Code Line: Response.Write(output);","None Currently Available","Impact is currently unknown","Finding has references.",FALSE,FALSE
+"""
+        file = TestFile("findings.csv", content)
+        parser = GenericParser()
+        findings = parser.get_findings(file, self.test)
+        self.validate_locations(findings)
+        self.assertEqual(False, findings[0].verified)
+
+    def test_parsed_finding_has_positive_false_positive_status(self):
+        content = """Date,Title,CweId,Url,Severity,Description,Mitigation,Impact,References,Active,Verified,FalsePositive
+11/7/2015,Potential XSS Vulnerability,79,"http://localhost/default.aspx",High,"FileName: default.aspx.cs
+Description: Potential XSS Vulnerability
+Line:18
+Code Line: Response.Write(output);","None Currently Available","Impact is currently unknown","Finding has references.",FALSE,FALSE,TRUE
+"""
+        file = TestFile("findings.csv", content)
+        parser = GenericParser()
+        findings = parser.get_findings(file, self.test)
+        self.validate_locations(findings)
+        self.assertEqual(True, findings[0].false_p)
+
+    def test_parsed_finding_has_negative_false_positive_status(self):
+        content = """Date,Title,CweId,Url,Severity,Description,Mitigation,Impact,References,Active,Verified,FalsePositive
+11/7/2015,Potential XSS Vulnerability,79,"http://localhost/default.aspx",High,"FileName: default.aspx.cs
+Description: Potential XSS Vulnerability
+Line:18
+Code Line: Response.Write(output);","None Currently Available","Impact is currently unknown","Finding has references.",FALSE,FALSE,FALSE
+"""
+        file = TestFile("findings.csv", content)
+        parser = GenericParser()
+        findings = parser.get_findings(file, self.test)
+        self.validate_locations(findings)
+        self.assertEqual(False, findings[0].false_p)
+
+    def test_parsed_finding_is_duplicate_has_positive_value(self):
+        content = """Date,Title,CweId,Url,Severity,Description,Mitigation,Impact,References,Active,Verified,FalsePositive,Duplicate
+11/7/2015,Potential XSS Vulnerability,79,"http://localhost/default.aspx",High,"FileName: default.aspx.cs
+Description: Potential XSS Vulnerability
+Line:18
+Code Line: Response.Write(output);","None Currently Available","Impact is currently unknown","Finding has references.",FALSE,FALSE,FALSE,TRUE
+"""
+        file = TestFile("findings.csv", content)
+        parser = GenericParser()
+        findings = parser.get_findings(file, self.test)
+        self.validate_locations(findings)
+        self.assertEqual(True, findings[0].duplicate)
+
+    def test_parsed_finding_is_duplicate_has_negative_value(self):
+        content = """Date,Title,CweId,Url,Severity,Description,Mitigation,Impact,References,Active,Verified,FalsePositive,Duplicate
+11/7/2015,Potential XSS Vulnerability,79,"http://localhost/default.aspx",High,"FileName: default.aspx.cs
+Description: Potential XSS Vulnerability
+Line:18
+Code Line: Response.Write(output);","None Currently Available","Impact is currently unknown","Finding has references.",FALSE,FALSE,FALSE,FALSE
+"""
+        file = TestFile("findings.csv", content)
+        parser = GenericParser()
+        findings = parser.get_findings(file, self.test)
+        self.validate_locations(findings)
+        self.assertEqual(False, findings[0].duplicate)
+
+    def test_missing_columns_is_fine(self):
+        content = """Date,Title,Url,Severity,Description,References,Active,Verified"""
+        file = TestFile("findings.csv", content)
+        parser = GenericParser()
+        parser.get_findings(file, self.test)
+
+    def test_column_order_is_flexible(self):
+        content1 = """\
+Date,Title,CweId,Url,Severity,Description,Mitigation,Impact,References,Active,Verified
+11/7/2015,Title,0,http://localhost,Severity,Description,Mitigation,Impact,References,True,True
+"""
+        content2 = """\
+Verified,Date,Title,CweId,Url,Severity,Description,Mitigation,Impact,References,Active
+True,11/7/2015,Title,0,http://localhost,Severity,Description,Mitigation,Impact,References,True
+"""
+        file1 = TestFile("findings.csv", content1)
+        file2 = TestFile("findings.csv", content2)
+
+        parser1 = GenericParser()
+        findings1 = parser1.get_findings(file1, self.test)
+        self.validate_locations(findings1)
+        parser2 = GenericParser()
+        findings2 = parser2.get_findings(file2, self.test)
+        self.validate_locations(findings2)
+
+        finding1 = findings1[0]
+        finding2 = findings2[0]
+
+        fields1 = {k: v for k, v in finding1.__dict__.items() if k != "_state"}
+        fields2 = {k: v for k, v in finding2.__dict__.items() if k != "_state"}
+
+        self.assertEqual(fields1, fields2)
+
+    def test_parse_json(self):
+        with (get_unit_tests_scans_path("generic") / "generic_report1.json").open(encoding="utf-8") as file:
+            parser = GenericParser()
+            findings = parser.get_findings(file, Test())
+            self.validate_locations(findings)
+            self.assertEqual(2, len(findings))
+            with self.subTest(i=0):
+                finding = findings[0]
+                self.assertEqual("test title", finding.title)
+                self.assertEqual(True, finding.active)
+                self.assertEqual(True, finding.verified)
+                self.assertEqual(False, finding.duplicate)
+                self.assertIn(finding.severity, Finding.SEVERITIES)
+                self.assertEqual(1, len(finding.unsaved_vulnerability_ids))
+                self.assertEqual("CVE-2020-36234", finding.unsaved_vulnerability_ids[0])
+                self.assertEqual(261, finding.cwe)
+                self.assertEqual("CVSS:3.1/AV:N/AC:L/PR:H/UI:R/S:C/C:L/I:L/A:N", finding.cvssv3)
+                self.assertIn("security", finding.unsaved_tags)
+                self.assertIn("network", finding.unsaved_tags)
+                self.assertEqual("3287f2d0-554f-491b-8516-3c349ead8ee5", finding.unique_id_from_tool)
+                self.assertEqual("TEST1", finding.vuln_id_from_tool)
+                # finding.clean_fields(exclude=["reporter", "numerical_severity", "planned_remediation_date"])
+            with self.subTest(i=1):
+                finding = findings[1]
+                self.assertEqual("test title2", finding.title)
+                self.assertEqual(True, finding.active)
+                self.assertEqual(False, finding.verified)
+                self.assertEqual(False, finding.duplicate)
+                self.assertIn(finding.severity, Finding.SEVERITIES)
+
+    def test_parse_json2(self):
+        with (get_unit_tests_scans_path("generic") / "generic_report2.json").open(encoding="utf-8") as file:
+            parser = GenericParser()
+            findings = parser.get_findings(file, Test())
+            self.validate_locations(findings)
+            self.assertEqual(2, len(findings))
+            with self.subTest(i=0):
+                finding = findings[0]
+                self.assertEqual("test title3", finding.title)
+                self.assertIn(finding.severity, Finding.SEVERITIES)
+                self.assertEqual(1, len(finding.unsaved_vulnerability_ids))
+                self.assertEqual("CVE-2020-36234", finding.unsaved_vulnerability_ids[0])
+                self.assertEqual(261, finding.cwe)
+                self.assertEqual("CVSS:3.1/AV:N/AC:L/PR:H/UI:R/S:C/C:L/I:L/A:N", finding.cvssv3)
+                self.assertEqual("Some mitigation", finding.mitigation)
+            with self.subTest(i=1):
+                finding = findings[1]
+                self.assertEqual("test title4", finding.title)
+                self.assertIn(finding.severity, Finding.SEVERITIES)
+                self.assertEqual("Some mitigation", finding.mitigation)
+
+    def test_parse_json3(self):
+        with (get_unit_tests_scans_path("generic") / "generic_report3.json").open(encoding="utf-8") as file:
+            parser = GenericParser()
+            findings = parser.get_findings(file, Test())
+            self.validate_locations(findings)
+            self.assertEqual(4, len(findings))
+            with self.subTest(i=0):
+                finding = findings[0]
+                finding.clean()
+                self.assertEqual("test title with endpoints as dict", finding.title)
+                self.assertIn(finding.severity, Finding.SEVERITIES)
+                self.assertEqual(1, len(finding.unsaved_vulnerability_ids))
+                self.assertEqual("CVE-2020-36234", finding.unsaved_vulnerability_ids[0])
+                self.assertEqual(261, finding.cwe)
+                self.assertEqual("CVSS:3.1/AV:N/AC:L/PR:H/UI:R/S:C/C:L/I:L/A:N", finding.cvssv3)
+                self.assertEqual("Some mitigation", finding.mitigation)
+                self.assertEqual(1, len(self.get_unsaved_locations(finding)))
+                location = self.get_unsaved_locations(finding)[0]
+                location.clean()
+                self.assertEqual("exemple.com", location.host)
+            with self.subTest(i=1):
+                finding = findings[1]
+                self.assertEqual("test title with endpoints as strings", finding.title)
+                self.assertIn(finding.severity, Finding.SEVERITIES)
+                self.assertEqual("Some mitigation", finding.mitigation)
+                self.assertEqual(2, len(self.get_unsaved_locations(finding)))
+                location = self.get_unsaved_locations(finding)[0]
+                location.clean()
+                self.assertEqual("http", location.protocol)
+                self.assertEqual("urlfiltering.paloaltonetworks.com", location.host)
+                self.assertEqual(80, location.port)
+                self.assertEqual("test-command-and-control", location.path)
+                location = self.get_unsaved_locations(finding)[1]
+                location.clean()
+                self.assertEqual("https", location.protocol)
+                self.assertEqual("urlfiltering.paloaltonetworks.com", location.host)
+                self.assertEqual(2345, location.port)
+                self.assertEqual("test-pest", location.path)
+            with self.subTest(i=2):
+                finding = findings[2]
+                self.assertEqual("test title mitigated", finding.title)
+                self.assertEqual(True, finding.active)
+                self.assertEqual(False, finding.duplicate)
+                self.assertEqual(True, finding.is_mitigated)
+                self.assertEqual(datetime.date(2021, 1, 16), finding.mitigated.date())
+            with self.subTest(i=3):
+                finding = findings[3]
+                self.assertEqual("test title mitigated ISO", finding.title)
+                self.assertEqual(True, finding.active)
+                self.assertEqual(False, finding.duplicate)
+                self.assertEqual(True, finding.is_mitigated)
+                self.assertEqual(datetime.date(2024, 1, 4), finding.date)
+                self.assertEqual(datetime.date(2024, 1, 24), finding.mitigated.date())
+
+    def test_parse_endpoints_and_vulnerability_ids_json(self):
+        with (get_unit_tests_scans_path("generic") / "generic_report4.json").open(encoding="utf-8") as file:
+            parser = GenericParser()
+            findings = parser.get_findings(file, Test())
+            self.validate_locations(findings)
+            self.assertEqual(1, len(findings))
+            finding = findings[0]
+            finding.clean()
+            self.assertEqual(4, len(self.get_unsaved_locations(finding)))
+
+            location = self.get_unsaved_locations(finding)[0]
+            location.clean()
+            self.assertEqual("www.example.com", location.host)
+
+            location = self.get_unsaved_locations(finding)[1]
+            location.clean()
+            self.assertEqual("localhost", location.host)
+
+            location = self.get_unsaved_locations(finding)[2]
+            location.clean()
+            self.assertEqual("127.0.0.1", location.host)
+            self.assertEqual(80, location.port)
+
+            location = self.get_unsaved_locations(finding)[3]
+            location.clean()
+            self.assertEqual("foo.bar", location.host)
+            self.assertEqual("path", location.path)
+
+            self.assertEqual(2, len(finding.unsaved_vulnerability_ids))
+            self.assertEqual("GHSA-5mrr-rgp6-x4gr", finding.unsaved_vulnerability_ids[0])
+            self.assertEqual("CVE-2015-9235", finding.unsaved_vulnerability_ids[1])
+
+    def test_parse_multiple_cwes_json(self):
+        with (get_unit_tests_scans_path("generic") / "generic_report_multi_cwe_fabricated.json").open(encoding="utf-8") as file:
+            parser = GenericParser()
+            findings = parser.get_findings(file, Test())
+            self.validate_locations(findings)
+            self.assertEqual(3, len(findings))
+
+            # "cwes" set with no "cwe": the first entry becomes the primary,
+            # the full set (mixed int / "CWE-<n>" forms) is kept on unsaved_cwes.
+            finding = findings[0]
+            self.assertEqual(89, finding.cwe)
+            self.assertEqual([89, "CWE-79", 22], finding.unsaved_cwes)
+            self.assertEqual(
+                ["CWE-89", "CWE-79", "CWE-22"],
+                finding_cwe_labels(finding.cwe, finding.unsaved_cwes),
+            )
+
+            # explicit "cwe" is kept as the primary; "cwes" adds the extras.
+            finding = findings[1]
+            self.assertEqual(79, finding.cwe)
+            self.assertEqual([89, 200], finding.unsaved_cwes)
+            self.assertEqual(
+                ["CWE-79", "CWE-89", "CWE-200"],
+                finding_cwe_labels(finding.cwe, finding.unsaved_cwes),
+            )
+
+            # legacy single "cwe" is unchanged and sets no unsaved_cwes.
+            finding = findings[2]
+            self.assertEqual(22, finding.cwe)
+            self.assertIsNone(finding.unsaved_cwes)
+            self.assertEqual(
+                ["CWE-22"],
+                finding_cwe_labels(finding.cwe, finding.unsaved_cwes),
+            )
+
+    def test_parse_multiple_cwes_csv(self):
+        content = """Date,Title,CweId,CweIds,Severity,Description
+11/7/2015,Multi CWE row,79,"89, CWE-22",High,desc
+"""
+        file = TestFile("findings.csv", content)
+        parser = GenericParser()
+        findings = parser.get_findings(file, self.test)
+        self.validate_locations(findings)
+        finding = findings[0]
+        # CweId stays the primary; CweIds populates the full set (canonical form).
+        self.assertEqual(79, finding.cwe)
+        self.assertEqual(["CWE-89", "CWE-22"], finding.unsaved_cwes)
+        self.assertEqual(
+            ["CWE-79", "CWE-89", "CWE-22"],
+            finding_cwe_labels(finding.cwe, finding.unsaved_cwes),
+        )
+
+    def test_parse_multiple_cwes_without_primary_csv(self):
+        content = """Date,Title,CweIds,Severity,Description
+11/7/2015,CWE set only,"CWE-611, 918",High,desc
+"""
+        file = TestFile("findings.csv", content)
+        parser = GenericParser()
+        findings = parser.get_findings(file, self.test)
+        self.validate_locations(findings)
+        finding = findings[0]
+        # No CweId column: the first CweIds entry becomes the primary.
+        self.assertEqual(611, finding.cwe)
+        self.assertEqual(["CWE-611", "CWE-918"], finding.unsaved_cwes)
+        self.assertEqual(
+            ["CWE-611", "CWE-918"],
+            finding_cwe_labels(finding.cwe, finding.unsaved_cwes),
+        )
+
+    def test_mitigated_csv_findings(self):
+        with (get_unit_tests_scans_path("generic") / "generic_report3.csv").open(encoding="utf-8") as file:
+            parser = GenericParser()
+            findings = parser.get_findings(file, Test())
+            self.validate_locations(findings)
+            self.assertEqual(2, len(findings))
+
+            finding = findings[0]
+            finding.clean()
+            self.assertEqual("Mitigated_ISO_Finding", finding.title)
+            self.assertEqual(datetime.date(2024, 1, 24), finding.date)
+            self.assertEqual(True, finding.is_mitigated)
+            self.assertEqual(datetime.date(2024, 2, 24), finding.mitigated.date())
+
+            finding = findings[1]
+            finding.clean()
+            self.assertEqual("Mitigated_Finding", finding.title)
+            self.assertEqual(datetime.date(2021, 2, 28), finding.date)
+            self.assertEqual(True, finding.is_mitigated)
+            self.assertEqual(datetime.date(2021, 3, 28), finding.mitigated.date())
+
+    def test_parse_host_and_vulnerability_id_csv(self):
+        with (get_unit_tests_scans_path("generic") / "generic_report4.csv").open(encoding="utf-8") as file:
+            parser = GenericParser()
+            findings = parser.get_findings(file, Test())
+            self.validate_locations(findings)
+            self.assertEqual(4, len(findings))
+
+            finding = findings[0]
+            finding.clean()
+            self.assertEqual(1, len(self.get_unsaved_locations(finding)))
+            location = self.get_unsaved_locations(finding)[0]
+            location.clean()
+            self.assertEqual("www.example.com", location.host)
+            self.assertEqual(1, len(finding.unsaved_vulnerability_ids))
+            self.assertEqual("CVE-2015-9235", finding.unsaved_vulnerability_ids[0])
+
+            finding = findings[1]
+            finding.clean()
+            self.assertEqual(1, len(self.get_unsaved_locations(finding)))
+            location = self.get_unsaved_locations(finding)[0]
+            location.clean()
+            self.assertEqual("localhost", location.host)
+            self.assertEqual(1, len(finding.unsaved_vulnerability_ids))
+            self.assertEqual("GHSA-5mrr-rgp6-x4gr", finding.unsaved_vulnerability_ids[0])
+
+            finding = findings[2]
+            finding.clean()
+            self.assertEqual(1, len(self.get_unsaved_locations(finding)))
+            location = self.get_unsaved_locations(finding)[0]
+            location.clean()
+            self.assertEqual("127.0.0.1", location.host)
+            self.assertEqual(80, location.port)
+            self.assertIsNone(finding.unsaved_vulnerability_ids)
+
+            finding = findings[3]
+            finding.clean()
+            self.assertEqual(1, len(self.get_unsaved_locations(finding)))
+            location = self.get_unsaved_locations(finding)[0]
+            location.clean()
+            self.assertEqual("foo.bar", location.host)
+            self.assertEqual("path", location.path)
+            self.assertIsNone(finding.unsaved_vulnerability_ids)
+
+    def test_parse_json_with_image(self):
+        with (get_unit_tests_scans_path("generic") / "test_with_image.json").open(encoding="utf-8") as file:
+            parser = GenericParser()
+            findings = parser.get_findings(file, Test())
+            self.validate_locations(findings)
+            self.assertEqual(1, len(findings))
+
+            finding = findings[0]
+            finding.clean()
+            self.assertEqual(1, len(finding.unsaved_files))
+            image = finding.unsaved_files[0]
+            self.assertEqual("Screenshot from 2017-04-10 16-54-19.png", image.get("title"))
+            self.assertIn("data", image)
+
+    def test_parse_json_custom_test(self):
+        with (get_unit_tests_scans_path("generic") / "generic_custom_test.json").open(encoding="utf-8") as file:
+            parser = GenericParser()
+            tests = parser.get_tests(parser.get_scan_types()[0], file)
+            self.assertEqual(1, len(tests))
+            # Verify that the name of the tests are accurate
+            test = tests[0]
+            self.assertEqual(test.name, "Test 1")
+            self.assertEqual(test.type, "Tool 1")
+            self.assertEqual(test.version, None)
+            findings = test.findings
+            self.assertEqual(1, len(findings))
+            with self.subTest(i=0):
+                finding = findings[0]
+                self.assertEqual("test title", finding.title)
+                self.assertEqual(True, finding.active)
+                self.assertEqual(True, finding.verified)
+                self.assertEqual(False, finding.duplicate)
+                self.assertIn(finding.severity, Finding.SEVERITIES)
+                self.assertEqual("CVE-2020-36234", finding.cve)
+                self.assertEqual(261, finding.cwe)
+                self.assertEqual("CVSS:3.1/AV:N/AC:L/PR:H/UI:R/S:C/C:L/I:L/A:N", finding.cvssv3)
+                self.assertIn("security", finding.unsaved_tags)
+                self.assertIn("network", finding.unsaved_tags)
+                self.assertEqual("3287f2d0-554f-491b-8516-3c349ead8ee5", finding.unique_id_from_tool)
+                self.assertEqual("TEST1", finding.vuln_id_from_tool)
+
+    def test_parse_json_empty_finding(self):
+        with (get_unit_tests_scans_path("generic") / "generic_empty.json").open(encoding="utf-8") as file:
+            parser = GenericParser()
+            with self.assertRaisesMessage(ValueError,
+                    "Required fields are missing: ['description', 'severity', 'title']"):
+                parser.get_findings(file, Test())
+
+    def test_parse_json_invalid_finding(self):
+        with (get_unit_tests_scans_path("generic") / "generic_invalid.json").open(encoding="utf-8") as file:
+            parser = GenericParser()
+            with self.assertRaisesMessage(ValueError,
+                    "Not allowed fields are present: ['invalid_field', 'last_status_update']"):
+                parser.get_findings(file, Test())
+
+    def test_parse_json_non_numeric_value_falls_back_to_default(self):
+        with (get_unit_tests_scans_path("generic") / "generic_non_numeric_fields.json").open(encoding="utf-8") as file:
+            parser = GenericParser()
+            findings = parser.get_findings(file, self.test)
+            self.validate_locations(findings)
+            finding = findings[0]
+            self.assertIsNone(finding.line)
+            self.assertIsNone(finding.nb_occurences)
+            self.assertIsNone(finding.sast_source_line)
+            self.assertIsNone(finding.scanner_confidence)
+            self.assertIsNone(finding.cvssv3_score)
+            self.assertIsNone(finding.cvssv4_score)
+            self.assertIsNone(finding.epss_percentile)
+            self.assertIsNone(finding.epss_score)
+            self.assertEqual(0, finding.cwe)
+            self.assertEqual(0, finding.thread_id)
+
+    def test_parse_json_numeric_value_given_as_string_is_converted(self):
+        with (get_unit_tests_scans_path("generic") / "generic_non_numeric_fields.json").open(encoding="utf-8") as file:
+            parser = GenericParser()
+            findings = parser.get_findings(file, self.test)
+            self.validate_locations(findings)
+            finding = findings[1]
+            self.assertEqual(42, finding.line)
+            self.assertEqual(79, finding.cwe)
+            self.assertEqual(0.5, finding.epss_score)
+
+    def test_parse_json_numeric_value_given_as_number_is_kept(self):
+        with (get_unit_tests_scans_path("generic") / "generic_non_numeric_fields.json").open(encoding="utf-8") as file:
+            parser = GenericParser()
+            findings = parser.get_findings(file, self.test)
+            self.validate_locations(findings)
+            finding = findings[2]
+            self.assertEqual(42, finding.line)
+            self.assertEqual(79, finding.cwe)
+            self.assertEqual(0.5, finding.epss_score)
+
+    def test_parse_csv_with_epss(self):
+        with (get_unit_tests_scans_path("generic") / "generic_csv_with_epss.csv").open(encoding="utf-8") as file:
+            parser = GenericParser()
+            findings = parser.get_findings(file, self.test)
+            self.validate_locations(findings)
+            self.assertEqual(1, len(findings))
+            finding = findings[0]
+            self.assertEqual(.00042, finding.epss_score)
+            self.assertEqual(.23474, finding.epss_percentile)
+
+    def test_parse_json_custom_test_with_meta(self):
+        with (get_unit_tests_scans_path("generic") / "generic_custom_test_with_meta.json").open(encoding="utf-8") as file:
+            parser = GenericParser()
+            tests = parser.get_tests(parser.get_scan_types()[0], file)
+            self.assertEqual(1, len(tests))
+            # Verify that the name of the tests are accurate
+            test = tests[0]
+            self.assertEqual(test.name, "Test 1")
+            self.assertEqual(test.type, "Tool 1")
+            self.assertEqual(test.version, "1.0.0")
+            self.assertEqual(test.description, "The contents of this report is from a tool that gathers vulnerabilities both statically and dynamically")
+            self.assertEqual(test.dynamic_tool, True)
+            self.assertEqual(test.static_tool, True)
+
+    def test_parse_json_with_fix_version(self):
+        with (get_unit_tests_scans_path("generic") / "generic_report_fix_version.json").open(encoding="utf-8") as file:
+            parser = GenericParser()
+            findings = parser.get_findings(file, self.test)
+            self.validate_locations(findings)
+            self.assertEqual(2, len(findings))
+
+            finding = findings[0]
+            self.assertEqual("test title with fix_version", finding.title)
+            self.assertTrue(finding.fix_available)
+            self.assertEqual("2.1.3", finding.fix_version)
+            self.assertEqual("spring-core", finding.component_name)
+
+            finding = findings[1]
+            self.assertEqual("test title without fix_version", finding.title)
+            self.assertFalse(finding.fix_available)
+            self.assertIsNone(finding.fix_version)
+
+    def test_parse_csv_with_fix_version(self):
+        with (get_unit_tests_scans_path("generic") / "generic_report_fix_version.csv").open(encoding="utf-8") as file:
+            parser = GenericParser()
+            findings = parser.get_findings(file, self.test)
+            self.validate_locations(findings)
+            self.assertEqual(2, len(findings))
+
+            finding = findings[0]
+            self.assertEqual("Test finding with fix_version", finding.title)
+            self.assertEqual("2.1.3", finding.fix_version)
+
+            finding = findings[1]
+            self.assertEqual("Test finding without fix_version", finding.title)
+
+    def test_parse_json_with_cve_and_vulnerability_ids(self):
+        with (get_unit_tests_scans_path("generic") / "generic_cve_and_vulnerability_ids.json").open(encoding="utf-8") as file:
+            parser = GenericParser()
+            findings = parser.get_findings(file, Test())
+            self.validate_locations(findings)
+            self.assertEqual(1, len(findings))
+            finding = findings[0]
+            self.assertEqual(3, len(finding.unsaved_vulnerability_ids))
+            self.assertEqual("CVE-2020-36234", finding.unsaved_vulnerability_ids[0])
+            self.assertEqual("GHSA-5mrr-rgp6-x4gr", finding.unsaved_vulnerability_ids[1])
+            self.assertEqual("OSV-2021-1234", finding.unsaved_vulnerability_ids[2])
+            for vid in finding.unsaved_vulnerability_ids:
+                self.assertIsInstance(vid, str)
+
+    def test_parse_json_repeated_unique_ids_are_dropped(self):
+        """
+        A unique id carried by several findings in one report is not an identity.
+
+        The shipped algorithm for this scan type is hash-only, so classic matching never
+        reads the field, but it is stored and consumed as a vendor identity by anything
+        that does (an operator-configured unique-id algorithm, Pro's identity ledger).
+        A repeated value would merge visibly different findings there, so it is dropped
+        at parse time; a genuinely unique id is kept.
+        """
+        with (get_unit_tests_scans_path("generic") / "generic_repeated_unique_ids.json").open(encoding="utf-8") as file:
+            parser = GenericParser()
+            findings = parser.get_findings(file, Test())
+        self.assertEqual(4, len(findings))
+        dropped = [f for f in findings if f.unique_id_from_tool is None]
+        self.assertEqual(3, len(dropped))
+        kept = [f for f in findings if f.unique_id_from_tool is not None]
+        self.assertEqual(1, len(kept))
+        self.assertEqual("dep-lodash-4.17.20", kept[0].unique_id_from_tool)
+
+
+# Regression: the generic CSV parser read "FALSE" as true for known_exploited /
+# ransomware_used / fix_available, never read CVSSV3_score, and aborted the whole
+# import on an empty numeric or date cell.
+class TestGenericCSVParserCellValues(DojoTestCase):
+
+    def parse(self, content):
+        return GenericParser().get_findings(TestFile("findings.csv", content), Test())
+
+    def test_kev_and_fix_booleans_follow_the_csv_boolean_rule(self):
+        content = """Date,Title,Description,Severity,known_exploited,ransomware_used,fix_available
+2024-05-01,true row,D,High,TRUE,True,t
+2024-05-01,false row,D,High,FALSE,False,f
+2024-05-01,empty row,D,High,,,
+"""
+        findings = {f.title: f for f in self.parse(content)}
+        expected = {
+            "true row": (True, True, True),
+            "false row": (False, False, False),
+            # an empty cell leaves the field unset: the model defaults are False, False, None
+            "empty row": (False, False, None),
+        }
+        for title, (known_exploited, ransomware_used, fix_available) in expected.items():
+            finding = findings[title]
+            with self.subTest(row=title):
+                self.assertEqual(known_exploited, finding.known_exploited, msg=f"known_exploited parsed as {finding.known_exploited!r}")
+                self.assertEqual(ransomware_used, finding.ransomware_used, msg=f"ransomware_used parsed as {finding.ransomware_used!r}")
+                self.assertEqual(fix_available, finding.fix_available, msg=f"fix_available parsed as {finding.fix_available!r}")
+
+    def test_cvssv3_score_column_is_parsed(self):
+        content = """Date,Title,Description,Severity,CVSSV3_score
+2024-05-01,with score,D,High,9.8
+2024-05-01,without score,D,High,
+"""
+        findings = {f.title: f for f in self.parse(content)}
+        with self.subTest(row="with score"):
+            self.assertEqual(9.8, findings["with score"].cvssv3_score)
+        with self.subTest(row="without score"):
+            self.assertIsNone(findings["without score"].cvssv3_score)
+
+    def test_empty_numeric_and_date_cells_are_skipped(self):
+        content = """Date,Title,Description,Severity,CweId,epss_score,epss_percentile,CVSSV4_score,MitigatedDate,kev_date
+2024-05-01,filled row,D,High,89,0.5,0.9,9.3,2024-05-20,2024-03-29
+2024-05-01,empty row,D,High,,,,,,
+"""
+        findings = {f.title: f for f in self.parse(content)}
+        filled, empty = findings["filled row"], findings["empty row"]
+        for field, filled_value, empty_value in [
+            ("cwe", 89, 0),
+            ("epss_score", 0.5, None),
+            ("epss_percentile", 0.9, None),
+            ("cvssv4_score", 9.3, None),
+            ("mitigated", datetime.datetime(2024, 5, 20), None),
+            ("kev_date", datetime.datetime(2024, 3, 29), None),
+        ]:
+            with self.subTest(field=field):
+                self.assertEqual(filled_value, getattr(filled, field))
+                self.assertEqual(empty_value, getattr(empty, field))
+
+    def test_fixture_with_filled_false_and_empty_cells(self):
+        with (get_unit_tests_scans_path("generic") / "generic_csv_empty_cells_and_booleans.csv").open(encoding="utf-8") as file:
+            findings = {f.title: f for f in GenericParser().get_findings(file, Test())}
+        self.assertEqual(4, len(findings))
+        for title, known_exploited, fix_available, cvssv3_score, cwe in [
+            ("All flags true", True, True, 9.8, 89),
+            ("All flags false", False, False, 6.1, 79),
+            ("All cells empty", False, None, None, 0),
+            ("Whitespace cells", False, None, None, 0),
+        ]:
+            finding = findings[title]
+            with self.subTest(row=title):
+                self.assertEqual(known_exploited, finding.known_exploited)
+                self.assertEqual(fix_available, finding.fix_available)
+                self.assertEqual(cvssv3_score, finding.cvssv3_score)
+                self.assertEqual(cwe, finding.cwe)

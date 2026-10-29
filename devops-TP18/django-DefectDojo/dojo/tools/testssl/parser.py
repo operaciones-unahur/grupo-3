@@ -1,0 +1,123 @@
+import csv
+import hashlib
+import io
+
+from dojo.location.feature import locations_enabled
+from dojo.models import Endpoint, Finding
+from dojo.tools.locations import LocationData
+
+
+class TestsslParser:
+    def get_scan_types(self):
+        return ["Testssl Scan"]
+
+    def get_label_for_scan_types(self, scan_type):
+        return "Testssl Scan"
+
+    def get_description_for_scan_types(self, scan_type):
+        return "Import CSV output of testssl scan report."
+
+    def get_findings(self, filename, test):
+        content = filename.read()
+        if isinstance(content, bytes):
+            content = content.decode("utf-8")
+        reader = csv.DictReader(
+            io.StringIO(content), delimiter=",", quotechar='"',
+        )
+
+        dupes = {}
+        for row in reader:
+            # filter 'OK'
+            # possible values: LOW|MEDIUM|HIGH|CRITICAL + WARN|OK|INFO
+            if row["severity"] == "OK":
+                continue
+            if row["id"] in {
+                "rating_spec",
+                "rating_doc",
+                "protocol_support_score",
+                "protocol_support_score_weighted",
+                "key_exchange_score",
+                "key_exchange_score_weighted",
+                "cipher_strength_score",
+                "cipher_strength_score_weighted",
+                "final_score",
+                "overall_grade",
+            }:
+                continue
+            if "grade_cap_reason_" in row["id"]:
+                continue
+            # convert severity
+            severity = row["severity"].lower().capitalize()
+            if severity in {"Warn", "Fatal"}:
+                severity = "Info"
+            # detect CVEs
+            cves = row["cve"].split(" ")
+            if len(cves) == 0:
+                cves = [None]
+
+            for vulnerability in cves:
+                finding = Finding(
+                    title=row["id"],
+                    description=row["finding"],
+                    severity=severity,
+                    nb_occurences=1,
+                )
+                # add Reference
+                if "cipher-tls" in row["id"]:
+                    ciphertls = "TLS_" + row["finding"].split("TLS_")[1]
+                    finding.references = "[https://ciphersuite.info/cs/" + ciphertls + "](https://ciphersuite.info/cs/" + ciphertls + ")"
+                # manage CVE
+                if vulnerability:
+                    finding.unsaved_vulnerability_ids = [vulnerability]
+                # manage CWE
+                if "-" in row["cwe"]:
+                    finding.cwe = int(row["cwe"].split("-")[1].strip())
+                # manage endpoint/location
+                if locations_enabled():
+                    port = int(row["port"]) if row.get("port") and row["port"].isdigit() else None
+                    finding.unsaved_locations.append(
+                        LocationData.url(host=row["fqdn/ip"].split("/")[0], port=port),
+                    )
+                else:
+                    # TODO: Delete this after the move to Locations
+                    finding.unsaved_endpoints = [
+                        Endpoint(host=row["fqdn/ip"].split("/")[0]),
+                    ]
+                    if row.get("port") and row["port"].isdigit():
+                        finding.unsaved_endpoints[0].port = int(row["port"])
+
+                # internal de-duplication
+                dupe_key = hashlib.sha256(
+                    "|".join(
+                        [
+                            finding.description,
+                            finding.title,
+                            str(vulnerability),
+                        ],
+                    ).encode("utf-8"),
+                ).hexdigest()
+                if dupe_key in dupes:
+                    if locations_enabled():
+                        dupes[dupe_key].unsaved_locations.extend(
+                            finding.unsaved_locations,
+                        )
+                    else:
+                        # TODO: Delete this after the move to Locations
+                        dupes[dupe_key].unsaved_endpoints.extend(
+                            finding.unsaved_endpoints,
+                        )
+                    if dupes[dupe_key].unsaved_vulnerability_ids:
+                        dupes[dupe_key].unsaved_vulnerability_ids.extend(
+                            finding.unsaved_vulnerability_ids,
+                        )
+                    else:
+                        dupes[
+                            dupe_key
+                        ].unsaved_vulnerability_ids = (
+                            finding.unsaved_vulnerability_ids
+                        )
+                    dupes[dupe_key].nb_occurences += finding.nb_occurences
+                else:
+                    dupes[dupe_key] = finding
+
+        return list(dupes.values())

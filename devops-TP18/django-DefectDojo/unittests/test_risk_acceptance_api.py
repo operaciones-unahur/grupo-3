@@ -1,0 +1,644 @@
+import datetime
+from unittest.mock import patch
+
+from rest_framework.authtoken.models import Token
+from rest_framework.request import Request
+from rest_framework.reverse import reverse
+from rest_framework.test import APIClient, APIRequestFactory, APITestCase
+
+from dojo.authorization.api_permissions import UserHasRiskAcceptancePermission
+from dojo.authorization.models import (
+    Product_Type_Member,
+    Role,
+)
+from dojo.authorization.roles_permissions import Roles
+from dojo.models import (
+    Engagement,
+    Finding,
+    Product,
+    Product_Type,
+    Risk_Acceptance,
+    Test,
+    Test_Type,
+    User,
+)
+from dojo.risk_acceptance import helper as ra_helper
+
+
+class TestRiskAcceptanceApi(APITestCase):
+
+    """
+    Comprehensive API tests for Risk Acceptance creation and updates.
+    Tests edge cases, validations, and engagement linking.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        # Create user with permissions
+        cls.user = User.objects.create(username="test_user", first_name="Test", last_name="User", is_staff=True)
+        cls.token = Token.objects.create(user=cls.user)
+
+        # Create product type
+        cls.product_type = Product_Type.objects.create(name="Test Product Type")
+        Product_Type_Member.objects.create(product_type=cls.product_type, user=cls.user, role=Role.objects.get(id=Roles.Owner))
+
+        # Create product with full risk acceptance enabled
+        cls.product_enabled = Product.objects.create(
+            prod_type=cls.product_type,
+            name="Product with RA Enabled",
+            description="Test product with full risk acceptance enabled",
+            enable_full_risk_acceptance=True,
+        )
+
+        # Create product with full risk acceptance disabled
+        cls.product_disabled = Product.objects.create(
+            prod_type=cls.product_type,
+            name="Product with RA Disabled",
+            description="Test product with full risk acceptance disabled",
+            enable_full_risk_acceptance=False,
+        )
+
+        # Create engagements
+        cls.engagement_a = Engagement.objects.create(
+            product=cls.product_enabled,
+            target_start=datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC),
+            target_end=datetime.datetime(2000, 2, 1, tzinfo=datetime.UTC),
+            name="Engagement A",
+        )
+
+        cls.engagement_b = Engagement.objects.create(
+            product=cls.product_enabled,
+            target_start=datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC),
+            target_end=datetime.datetime(2000, 2, 1, tzinfo=datetime.UTC),
+            name="Engagement B",
+        )
+
+        cls.engagement_disabled = Engagement.objects.create(
+            product=cls.product_disabled,
+            target_start=datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC),
+            target_end=datetime.datetime(2000, 2, 1, tzinfo=datetime.UTC),
+            name="Engagement Disabled",
+        )
+
+        # Create test type and tests
+        cls.test_type = Test_Type.objects.create(name="API Test Scan", static_tool=True)
+
+        cls.test_a1 = Test.objects.create(
+            engagement=cls.engagement_a,
+            test_type=cls.test_type,
+            target_start=datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC),
+            target_end=datetime.datetime(2000, 2, 1, tzinfo=datetime.UTC),
+        )
+
+        cls.test_b1 = Test.objects.create(
+            engagement=cls.engagement_b,
+            test_type=cls.test_type,
+            target_start=datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC),
+            target_end=datetime.datetime(2000, 2, 1, tzinfo=datetime.UTC),
+        )
+
+        cls.test_disabled = Test.objects.create(
+            engagement=cls.engagement_disabled,
+            test_type=cls.test_type,
+            target_start=datetime.datetime(2000, 1, 1, tzinfo=datetime.UTC),
+            target_end=datetime.datetime(2000, 2, 1, tzinfo=datetime.UTC),
+        )
+
+        # Create findings
+        cls.finding_a1 = Finding.objects.create(
+            test=cls.test_a1,
+            title="Finding A1",
+            severity="High",
+            verified=True,
+            description="Test finding in engagement A",
+            reporter=cls.user,
+            numerical_severity="S1",
+            static_finding=True,
+            dynamic_finding=False,
+        )
+
+        cls.finding_a2 = Finding.objects.create(
+            test=cls.test_a1,
+            title="Finding A2",
+            severity="Medium",
+            verified=True,
+            description="Another test finding in engagement A",
+            reporter=cls.user,
+            numerical_severity="S2",
+            static_finding=True,
+            dynamic_finding=False,
+        )
+
+        cls.finding_a3 = Finding.objects.create(
+            test=cls.test_a1,
+            title="Finding A3",
+            severity="Low",
+            verified=True,
+            description="Third test finding in engagement A",
+            reporter=cls.user,
+            numerical_severity="S3",
+            static_finding=True,
+            dynamic_finding=False,
+        )
+
+        cls.finding_b1 = Finding.objects.create(
+            test=cls.test_b1,
+            title="Finding B1",
+            severity="High",
+            verified=True,
+            description="Test finding in engagement B",
+            reporter=cls.user,
+            numerical_severity="S1",
+            static_finding=True,
+            dynamic_finding=False,
+        )
+
+        cls.finding_b2 = Finding.objects.create(
+            test=cls.test_b1,
+            title="Finding B2",
+            severity="Medium",
+            verified=True,
+            description="Another test finding in engagement B",
+            reporter=cls.user,
+            numerical_severity="S2",
+            static_finding=True,
+            dynamic_finding=False,
+        )
+
+        cls.finding_disabled = Finding.objects.create(
+            test=cls.test_disabled,
+            title="Finding Disabled",
+            severity="High",
+            verified=True,
+            description="Test finding in disabled engagement",
+            reporter=cls.user,
+            numerical_severity="S1",
+            static_finding=True,
+            dynamic_finding=False,
+        )
+
+    def setUp(self):
+        self.client = APIClient()
+        self.client.credentials(HTTP_AUTHORIZATION="Token " + self.token.key)
+        self.url = reverse("risk_acceptance-list")
+
+    # Helper method to create a risk acceptance for testing filters
+    def create_risk_acceptance(self):
+        risk_acceptance = Risk_Acceptance.objects.create(
+            name="Filter Test RA",
+            recommendation="A",
+            decision="A",
+            accepted_by="Test User",
+            owner=self.user,
+        )
+        risk_acceptance.accepted_findings.add(self.finding_a1)
+        self.engagement_a.risk_acceptance.add(risk_acceptance)
+        return risk_acceptance
+
+    def test_create_risk_acceptance_links_to_engagement(self):
+        """Test that risk acceptance created via API appears in engagement.risk_acceptance"""
+        payload = {
+            "name": "Test Risk Acceptance",
+            "recommendation": "A",
+            "recommendation_details": "Test recommendation",
+            "decision": "A",
+            "decision_details": "Test decision",
+            "accepted_by": "Test User",
+            "owner": self.user.id,
+            "expiration_date": "2025-12-31T23:59:59Z",
+            "reactivate_expired": True,
+            "restart_sla_expired": False,
+            "accepted_findings": [self.finding_a1.id, self.finding_a2.id],
+        }
+
+        response = self.client.post(self.url, payload, format="json")
+        self.assertEqual(201, response.status_code, response.content)
+
+        # Verify risk acceptance was created
+        ra_id = response.data["id"]
+        risk_acceptance = Risk_Acceptance.objects.get(id=ra_id)
+
+        # Verify it's linked to the engagement
+        self.assertIn(risk_acceptance, self.engagement_a.risk_acceptance.all())
+        self.assertEqual(1, self.engagement_a.risk_acceptance.count())
+
+        # Verify findings are marked as risk accepted
+        self.finding_a1.refresh_from_db()
+        self.finding_a2.refresh_from_db()
+        self.assertTrue(self.finding_a1.risk_accepted)
+        self.assertTrue(self.finding_a2.risk_accepted)
+
+    def test_create_risk_acceptance_multiple_engagements_fails(self):
+        """Test that creating risk acceptance with findings from multiple engagements fails"""
+        payload = {
+            "name": "Invalid Risk Acceptance",
+            "recommendation": "A",
+            "decision": "A",
+            "accepted_by": "Test User",
+            "owner": self.user.id,
+            "accepted_findings": [self.finding_a1.id, self.finding_b1.id],  # Different engagements!
+        }
+
+        response = self.client.post(self.url, payload, format="json")
+        self.assertEqual(403, response.status_code, response.content)
+        self.assertIn("multiple engagements", str(response.data))
+
+    def test_create_risk_acceptance_product_disabled_fails(self):
+        """Test that creating risk acceptance fails when product has enable_full_risk_acceptance=False"""
+        payload = {
+            "name": "Disabled Product Risk Acceptance",
+            "recommendation": "A",
+            "decision": "A",
+            "accepted_by": "Test User",
+            "owner": self.user.id,
+            "accepted_findings": [self.finding_disabled.id],
+        }
+
+        response = self.client.post(self.url, payload, format="json")
+        self.assertEqual(403, response.status_code, response.content)
+        self.assertIn("not enabled", str(response.data))
+
+        # Verify no risk acceptance was created
+        self.assertEqual(0, self.engagement_disabled.risk_acceptance.count())
+
+    def test_update_risk_acceptance_add_findings_same_engagement(self):
+        """Test that updating to add more findings from same engagement succeeds"""
+        # Create risk acceptance with one finding
+        ra = Risk_Acceptance.objects.create(
+            name="Initial RA",
+            recommendation="A",
+            decision="A",
+            accepted_by="Test User",
+            owner=self.user,
+        )
+        ra.accepted_findings.add(self.finding_a1)
+        self.engagement_a.risk_acceptance.add(ra)
+
+        # Update to add another finding from same engagement
+        payload = {
+            "name": "Updated RA",
+            "recommendation": "A",
+            "decision": "A",
+            "accepted_by": "Test User",
+            "owner": self.user.id,
+            "accepted_findings": [self.finding_a1.id, self.finding_a2.id],
+        }
+
+        response = self.client.put(f"{self.url}{ra.id}/", payload, format="json")
+        self.assertEqual(200, response.status_code, response.content)
+
+        # Verify both findings are now in the risk acceptance
+        ra.refresh_from_db()
+        self.assertEqual(2, ra.accepted_findings.count())
+        self.assertIn(self.finding_a1, ra.accepted_findings.all())
+        self.assertIn(self.finding_a2, ra.accepted_findings.all())
+
+    def test_update_risk_acceptance_switch_engagement_fails(self):
+        """Test that replacing all findings with findings from different engagement fails"""
+        # Create risk acceptance with findings from engagement A
+        ra = Risk_Acceptance.objects.create(
+            name="RA for Engagement A",
+            recommendation="A",
+            decision="A",
+            accepted_by="Test User",
+            owner=self.user,
+        )
+        ra.accepted_findings.add(self.finding_a1)
+        self.engagement_a.risk_acceptance.add(ra)
+
+        # Try to replace with finding from engagement B
+        payload = {
+            "name": "RA for Engagement A",
+            "recommendation": "A",
+            "decision": "A",
+            "accepted_by": "Test User",
+            "owner": self.user.id,
+            "accepted_findings": [self.finding_b1.id],  # Different engagement!
+        }
+
+        response = self.client.put(f"{self.url}{ra.id}/", payload, format="json")
+        # Returns 403 because the validate_findings_have_same_engagement check runs first
+        self.assertEqual(403, response.status_code, response.content)
+        self.assertIn("multiple engagements", str(response.data))
+
+    def test_update_risk_acceptance_empty_then_different_engagement_fails(self):
+        """Test edge case: risk acceptance with no findings cannot accept findings from different engagement"""
+        # Create risk acceptance with findings from engagement A, then remove them
+        ra = Risk_Acceptance.objects.create(
+            name="RA for Engagement A",
+            recommendation="A",
+            decision="A",
+            accepted_by="Test User",
+            owner=self.user,
+        )
+        ra.accepted_findings.add(self.finding_a1)
+        self.engagement_a.risk_acceptance.add(ra)
+
+        # Remove all findings (make it empty)
+        ra.accepted_findings.clear()
+
+        # Try to add finding from engagement B
+        payload = {
+            "name": "RA for Engagement A",
+            "recommendation": "A",
+            "decision": "A",
+            "accepted_by": "Test User",
+            "owner": self.user.id,
+            "accepted_findings": [self.finding_b1.id],  # Different engagement!
+        }
+
+        response = self.client.put(f"{self.url}{ra.id}/", payload, format="json")
+        self.assertEqual(400, response.status_code, response.content)
+        self.assertIn("belongs to engagement", str(response.data))
+
+    def test_update_risk_acceptance_add_cross_engagement_fails(self):
+        """Test that adding findings from different engagement while keeping existing ones fails"""
+        # Create risk acceptance with finding from engagement A
+        ra = Risk_Acceptance.objects.create(
+            name="RA for Engagement A",
+            recommendation="A",
+            decision="A",
+            accepted_by="Test User",
+            owner=self.user,
+        )
+        ra.accepted_findings.add(self.finding_a1)
+        self.engagement_a.risk_acceptance.add(ra)
+
+        # Try to add findings from both engagements
+        payload = {
+            "name": "RA for Engagement A",
+            "recommendation": "A",
+            "decision": "A",
+            "accepted_by": "Test User",
+            "owner": self.user.id,
+            "accepted_findings": [self.finding_a1.id, self.finding_b1.id],  # Mixed engagements!
+        }
+
+        response = self.client.put(f"{self.url}{ra.id}/", payload, format="json")
+        self.assertEqual(403, response.status_code, response.content)
+        self.assertIn("multiple engagements", str(response.data))
+
+    def test_update_expired_risk_acceptance_reinstates_findings(self):
+        """
+        Regression test for the serializer update() reinstate bug.
+
+        Extending an expired risk acceptance's expiration_date via the API must call
+        ra_helper.reinstate(): its accepted findings are set back to inactive/risk-accepted
+        and expiration_date_handled is cleared so the Celery expiry task re-processes it.
+        """
+        past_date = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=5)
+        ra = Risk_Acceptance.objects.create(
+            name="Expired RA",
+            recommendation="A",
+            decision="A",
+            accepted_by="Test User",
+            owner=self.user,
+            expiration_date=past_date,
+            expiration_date_handled=past_date,
+        )
+        ra.accepted_findings.add(self.finding_a1)
+        self.engagement_a.risk_acceptance.add(ra)
+
+        # Simulate the post-expiry state: the expiry job already reactivated the finding
+        self.finding_a1.active = True
+        self.finding_a1.risk_accepted = False
+        self.finding_a1.save()
+
+        future_date = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=30)
+        payload = {
+            "expiration_date": future_date.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "accepted_findings": [self.finding_a1.id],
+        }
+
+        response = self.client.patch(f"{self.url}{ra.id}/", payload, format="json")
+        self.assertEqual(200, response.status_code, response.content)
+
+        # Finding is reinstated (only reinstate() flips these back)
+        self.finding_a1.refresh_from_db()
+        self.assertFalse(self.finding_a1.active)
+        self.assertTrue(self.finding_a1.risk_accepted)
+
+        # Flags cleared so the RA is eligible for the next Celery expiry cycle
+        ra.refresh_from_db()
+        self.assertIsNone(ra.expiration_date_handled)
+        self.assertIsNone(ra.expiration_date_warned)
+
+        # The date the caller asked for is the date that gets stored. reinstate()
+        # used to overwrite it with risk_acceptance_form_default_days.
+        self.assertEqual(
+            future_date.replace(microsecond=0),
+            ra.expiration_date.replace(microsecond=0),
+        )
+
+    def test_update_never_expired_risk_acceptance_leaves_findings_unchanged(self):
+        """
+        Regression test companion: editing the expiration_date of a risk acceptance that
+        never expired must not disturb its findings, and expiration_date_handled stays None.
+        """
+        old_date = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=30)
+        ra = Risk_Acceptance.objects.create(
+            name="Active RA",
+            recommendation="A",
+            decision="A",
+            accepted_by="Test User",
+            owner=self.user,
+            expiration_date=old_date,
+        )
+        ra.accepted_findings.add(self.finding_a1)
+        self.engagement_a.risk_acceptance.add(ra)
+
+        # Normal accepted state for a live risk acceptance
+        self.finding_a1.active = False
+        self.finding_a1.risk_accepted = True
+        self.finding_a1.save()
+
+        new_date = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=60)
+        payload = {
+            "expiration_date": new_date.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "accepted_findings": [self.finding_a1.id],
+        }
+
+        response = self.client.patch(f"{self.url}{ra.id}/", payload, format="json")
+        self.assertEqual(200, response.status_code, response.content)
+
+        # Findings untouched
+        self.finding_a1.refresh_from_db()
+        self.assertFalse(self.finding_a1.active)
+        self.assertTrue(self.finding_a1.risk_accepted)
+
+        # Never handled, so it stays None
+        ra.refresh_from_db()
+        self.assertIsNone(ra.expiration_date_handled)
+        self.assertIsNone(ra.expiration_date_warned)
+
+    def test_partial_update_without_accepted_findings_keeps_findings(self):
+        ra = self.make_risk_acceptance()
+
+        response = self.client.patch(f"{self.url}{ra.id}/", {"name": "Renamed RA"}, format="json")
+        self.assertEqual(200, response.status_code, response.content)
+
+        ra.refresh_from_db()
+        self.assertEqual("Renamed RA", ra.name)
+        self.assertEqual([self.finding_a1.id], list(ra.accepted_findings.values_list("id", flat=True)))
+        self.finding_a1.refresh_from_db()
+        self.assertFalse(self.finding_a1.active)
+        self.assertTrue(self.finding_a1.risk_accepted)
+
+    def make_risk_acceptance(self, *, expired=False):
+        """Build a risk acceptance covering finding_a1, optionally in the post-expiry state."""
+        stamp = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=5)
+        risk_acceptance = Risk_Acceptance.objects.create(
+            name="RA under test",
+            recommendation="A",
+            decision="A",
+            accepted_by="Test User",
+            owner=self.user,
+            expiration_date=stamp if expired else datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=30),
+            expiration_date_handled=stamp if expired else None,
+        )
+        risk_acceptance.accepted_findings.add(self.finding_a1)
+        self.engagement_a.risk_acceptance.add(risk_acceptance)
+
+        self.finding_a1.active = expired
+        self.finding_a1.risk_accepted = not expired
+        self.finding_a1.save()
+        return risk_acceptance
+
+    def test_expire_action_expires_the_risk_acceptance(self):
+        risk_acceptance = self.make_risk_acceptance()
+
+        response = self.client.post(f"{self.url}{risk_acceptance.id}/expire/", {"reason": "no longer justified"}, format="json")
+        self.assertEqual(200, response.status_code, response.content)
+
+        risk_acceptance.refresh_from_db()
+        self.assertIsNotNone(risk_acceptance.expiration_date_handled)
+        # the finding it covered is open again
+        self.finding_a1.refresh_from_db()
+        self.assertTrue(self.finding_a1.active)
+        self.assertFalse(self.finding_a1.risk_accepted)
+        # and the reason is on the record
+        self.assertIn("no longer justified", " ".join(note.entry for note in risk_acceptance.notes.all()))
+
+    def test_expire_action_rejects_an_already_expired_risk_acceptance(self):
+        risk_acceptance = self.make_risk_acceptance(expired=True)
+
+        response = self.client.post(f"{self.url}{risk_acceptance.id}/expire/", {}, format="json")
+        self.assertEqual(400, response.status_code, response.content)
+
+    def test_reinstate_action_uses_the_requested_expiration_date(self):
+        risk_acceptance = self.make_risk_acceptance(expired=True)
+        requested_date = datetime.datetime.now(datetime.UTC) + datetime.timedelta(days=45)
+
+        response = self.client.post(
+            f"{self.url}{risk_acceptance.id}/reinstate/",
+            {"expiration_date": requested_date.strftime("%Y-%m-%dT%H:%M:%SZ"), "reason": "extended pending a fix"},
+            format="json",
+        )
+        self.assertEqual(200, response.status_code, response.content)
+
+        risk_acceptance.refresh_from_db()
+        self.assertEqual(risk_acceptance.expiration_date.date(), requested_date.date())
+        self.assertIsNone(risk_acceptance.expiration_date_handled)
+        self.finding_a1.refresh_from_db()
+        self.assertTrue(self.finding_a1.risk_accepted)
+        self.assertFalse(self.finding_a1.active)
+        self.assertIn("extended pending a fix", " ".join(note.entry for note in risk_acceptance.notes.all()))
+
+    def test_reinstate_action_without_a_date_uses_the_configured_window(self):
+        risk_acceptance = self.make_risk_acceptance(expired=True)
+
+        response = self.client.post(f"{self.url}{risk_acceptance.id}/reinstate/", {}, format="json")
+        self.assertEqual(200, response.status_code, response.content)
+
+        risk_acceptance.refresh_from_db()
+        expected = ra_helper.default_expiration_date()
+        self.assertEqual(risk_acceptance.expiration_date.date(), expected.date())
+
+    def test_reinstate_action_rejects_a_live_risk_acceptance(self):
+        risk_acceptance = self.make_risk_acceptance()
+
+        response = self.client.post(f"{self.url}{risk_acceptance.id}/reinstate/", {}, format="json")
+        self.assertEqual(400, response.status_code, response.content)
+
+    def test_expire_action_is_denied_without_access_to_the_product(self):
+        risk_acceptance = self.make_risk_acceptance()
+        outsider = User.objects.create(username="ra_outsider")
+        outsider_client = APIClient()
+        outsider_client.force_authenticate(user=outsider)
+
+        response = outsider_client.post(f"{self.url}{risk_acceptance.id}/expire/", {}, format="json")
+        self.assertIn(response.status_code, (403, 404), response.content)
+
+        risk_acceptance.refresh_from_db()
+        self.assertIsNone(risk_acceptance.expiration_date_handled, "an outsider must not be able to expire it")
+
+    def test_post_object_permission_names_a_permission(self):
+        """
+        A POST to this viewset must be checked against a real permission, not None.
+
+        ``check_object_permission`` takes the POST permission as its fourth argument. Omitting it
+        passes None down to ``user_has_permission``, which this codebase happens to answer False --
+        but a stricter authorization layer treats an unmapped permission as unimplemented and
+        raises, turning a 403 into a 500. DefectDojo Pro does exactly that, and its own tests
+        caught it on the expire and reinstate actions: the first POST actions this viewset gained.
+
+        Asserted on the call rather than through a request because neither outcome is visible
+        end-to-end here: a superuser is allowed before the permission is read, and a user without
+        access is filtered out of the queryset and gets a 404 first.
+        """
+        risk_acceptance = self.make_risk_acceptance()
+        request = Request(APIRequestFactory().post(f"{self.url}{risk_acceptance.id}/expire/", {}, format="json"))
+        request.user = User.objects.create(username="ra_post_permission_user")
+
+        with patch("dojo.authorization.api_permissions.check_object_permission") as check:
+            UserHasRiskAcceptancePermission().has_object_permission(request, None, risk_acceptance)
+
+        # (request, obj, get, put, delete, post)
+        self.assertEqual(len(check.call_args.args), 6, "the POST permission is missing")
+        self.assertEqual(check.call_args.args[5], "edit")
+
+    def test_risk_acceptance_created_filter(self):
+        # 1. Create a baseline Risk Acceptance using the existing test setup
+        risk_acceptance = self.create_risk_acceptance()
+
+        # 2. Manually backdate the created date to test ranges
+        past_date = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=10)
+        risk_acceptance.created = past_date
+        risk_acceptance.save()
+
+        # 3. Test `created__lt` (Less than / Before)
+        # Should return the risk acceptance because it was created 10 days ago
+        future_date = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        response = self.client.get(reverse("risk_acceptance-list") + f"?created__lt={future_date}")
+        self.assertEqual(response.status_code, 200)
+        result_ids = {item["id"] for item in response.json()["results"]}
+        self.assertIn(risk_acceptance.id, result_ids)
+
+        # 4. Test `created__gt` (Greater than / After)
+        # Should NOT return the risk acceptance because it is not newer than today
+        response = self.client.get(reverse("risk_acceptance-list") + f"?created__gt={future_date}")
+        self.assertEqual(response.status_code, 200)
+        result_ids = {item["id"] for item in response.json()["results"]}
+        self.assertNotIn(risk_acceptance.id, result_ids)
+
+    def test_risk_acceptance_updated_filter(self):
+        risk_acceptance = self.create_risk_acceptance()
+
+        # Manually backdate the updated date
+        past_date = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=10)
+        # We use .update() to bypass the auto_now=True behavior on the updated field
+        type(risk_acceptance).objects.filter(pk=risk_acceptance.id).update(updated=past_date)
+
+        future_date = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+        # Test updated__lt
+        response = self.client.get(reverse("risk_acceptance-list") + f"?updated__lt={future_date}")
+        self.assertEqual(response.status_code, 200)
+        result_ids = {item["id"] for item in response.json()["results"]}
+        self.assertIn(risk_acceptance.id, result_ids)
+
+        # Test updated__gt
+        response = self.client.get(reverse("risk_acceptance-list") + f"?updated__gt={future_date}")
+        self.assertEqual(response.status_code, 200)
+        result_ids = {item["id"] for item in response.json()["results"]}
+        self.assertNotIn(risk_acceptance.id, result_ids)

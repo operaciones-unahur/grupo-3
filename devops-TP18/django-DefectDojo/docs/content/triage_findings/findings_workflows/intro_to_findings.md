@@ -1,0 +1,146 @@
+---
+title: "Introduction to Findings"
+description: "The main workflow and vulnerability tracking system of DefectDojo"
+weight: 1
+aliases:
+  - /en/working_with_findings/intro_to_findings
+---
+Findings are the main way that DefectDojo standardizes and guides the reporting and remediation process of your security tools. Regardless of whether a vulnerability was reported in SonarQube, Acunetix, or your team’s custom tool, Findings give you the ability to manage each vulnerability in the same way.
+
+## What are Findings?
+
+Findings in DefectDojo are made up of the following components: 
+
+* The reported vulnerability data in question
+* The ‘status’ of the Finding, used to track remediation, risk acceptance or other decisions made around the vulnerability
+* Other metadata related to the Finding. For example, this could include the location of a Finding in your network, a tool’s suggestions for remediation, or links to an associated CWE or EPSS score.
+
+In addition to storing the vulnerability data and providing a remediation framework, DefectDojo also enhances your Findings in the following ways:
+
+* Automatically adding related EPSS scores to a Finding to describe exploitability
+* Automatically translating a security tool’s severity metric into a Severity score for each Finding, which confers an SLA onto the Finding according to your Asset’s SLA Configuration.
+
+Overall, DefectDojo Findings are designed to work with the Asset Hierarchy to standardize your efforts, and apply a consistent method to each Asset.
+
+## A Finding Page
+
+The Finding Page contains various components. Each will be populated by the Import process when the Finding is created.
+
+![image](images/Introduction_to_Findings.png)
+
+1. **The Title of the Finding:** Usually this is a descriptive shorthand which identifies the vulnerability or issue detected. This section is also where user\-created Tags are displayed if they exist.  
+​
+2. **Finding Overview:** This section contains five separate pages of relevant information for the Finding: Description, Mitigation, Impact, References and Notes. These fields can be populated automatically based on the incoming vulnerability data, or they can be edited by a DefectDojo user to provide additional context.  
+​  
+- ​**Description** is a more detailed summary and explanation of the Finding in question.  
+- ​**Mitigation** is a suggested method for mitigating the Finding so that it is no longer present in your system.  
+- ​**Impact** describes the impact of the vulnerability on your security posture. This page might hold descriptive text, or it may include a [CVSS Vector String](https://qualysguard.qualys.com/qwebhelp/fo_portal/setup/cvss_vector_strings.htm), which is a shorthand way to communicate the vulnerability’s overall exploitability and with the consequences of an exploitation to your organization. Impact is closely related to a Finding’s Severity field.  
+- ​**References** will list any links or additional information relevant to this Finding if included.  
+- ​**Notes** is a page where you can record any other relevant information to this Finding. Notes are ‘DefectDojo\-only’ metadata, and they are not created at the time of import. Use this field to track your mitigation progress or to add more specific detail to the Finding.  
+​
+3. **Additional Details:** This section lists other details related to this Finding, if relevant:
+
+
+	* Request/Response Pairs associated with the vulnerability
+	* Steps To Reproduce the vulnerability
+	* Severity Justification where you can record a more detailed explanation of the severity or impact of the Finding.  
+	​  
+
+4. **Metadata: This section contains filterable metadata related to the Finding:**
+
+
+	* **ID:** the ID value of the Finding in DefectDojo
+	* **Severity:** the Severity value of the Finding. Can be Info, Low, Medium, High or Critical. Finding Severities are directly related to the Finding’s calculated SLA, based on the Asset the Finding is stored in.
+	* **Status:** the status of the Finding. Can be either Active or Inactive. In addition to these, Findings can also have a Status of Duplicate, Mitigated, False Positive, Out Of Scope, Risk Accepted or Under Defect Review. These Statuses explain the State of the Finding in more detail.
+	* **Type:** this field describes how the Finding was found, either via a Static (SAST) evaluation of the source code, or through a Dynamic (DAST) evaluation of the Asset as it was running. This field is defined by the tool type.
+	* **Location:** this field describes the related File Path to your vulnerability, if relevant.
+	* **Line:** this field describes the line of code containing the vulnerability, if relevant.
+	* **Date Discovered:** this field shows either the date the Finding was imported to DefectDojo, or the date the Finding was discovered by the Tool.
+	* **Age:** this calculated field shows the number of days the Finding has been active.
+	* **Reporter:** this is the username of the DefectDojo account who created this Finding.
+	* **CWE:** this field is a link to the external CWE (Common Weakness Enumeration) definition which applies to this Finding.
+	* **Vulnerability ID:** if there is a particular ID value for this vulnerability within the tool itself, it will be tracked here.
+	* **EPSS Score / Percentile:** if the source data has a CWE value, DefectDojo will automatically pull an [EPSS Score](https://www.first.org/epss/) and Percentile (Exploit Prediction Scoring System). EPSS represents the likelihood that a software vulnerability can be exploited, based on real\-world exploit data. EPSS scores are updated on an ongoing basis, using the latest exploitation data from First.
+	* **Found By:** This will list the scanner used to find this vulnerability.  
+	​
+
+## Notes and @mentions
+
+The **Notes** page on a Finding is where your team records context that isn't part of the imported scan data — mitigation progress, triage decisions, or any other commentary. Notes are DefectDojo-only metadata and are never created at import time.
+
+Notes appear as a feed, newest first, and you can flip the order to oldest first. Each note shows its author, when it was written, its note type, and a **Private** badge when the note is private. A private note is only ever shown to the person who wrote it.
+
+### Writing notes in markdown
+
+Note entries support markdown, so you can use headings, **bold** and *italic* text, bullet and numbered lists, block quotes, tables, links, and fenced code blocks. The note editor is the same one used for a Finding's description, with a toolbar for the common formatting options. To read a note exactly as it was typed rather than as formatted text, use the toggle in the top right of the note body.
+
+### Adding images
+
+You can paste a screenshot from your clipboard straight into a note, drag an image file onto the editor, or pick one with the **Insert image** toolbar button. DefectDojo stores the image and shows it inline in the notes feed and in generated reports.
+
+This is not specific to notes: the same editor and the same image support are used by a Finding's description and its other markdown fields, and by descriptions across the rest of DefectDojo. See [The Markdown Editor](/navigation/pro__markdown_editor/) for the accepted formats, the size limit, who can see a stored image, and how unused images are cleaned up.
+
+### Editing, deleting and history
+
+Every note carries an actions menu with **Edit**, **View History** and **Delete**, and each entry appears only when you are allowed to use it:
+
+* You can always edit, delete and read the history of a note you wrote yourself.
+* To manage someone else's note you need the matching role permission on the object the note belongs to: Note Edit, Note Delete, or Note View History.
+* Adding a note requires Note Add, which every role above Reader holds, and Readers hold as well.
+
+An edited note is labelled **(edited)** and records who changed it and when. **View History** lists every revision of the note, newest first, so nothing is lost when a note is rewritten. Only the entry itself can be changed: a note's type and its private flag are fixed once the note is created.
+
+### Mentioning a user with @
+
+When you add a note, you can **@mention** another DefectDojo user to notify them. Type `@` immediately followed by their username (for example `@alice`) anywhere in the note. When you save the note, each mentioned user receives a **user-mentioned** notification that links back to the note.
+
+A few details worth knowing:
+
+* The `@` must be at the **start of the note or come right after a space**. This is deliberate — it stops email addresses written mid-sentence (like `alice@example.com`) from firing accidental mentions.
+* The name after `@` must match an **existing, active** DefectDojo username. Mentions of unknown or deactivated users are ignored.
+* A trailing period is ignored, so a mention that ends a sentence (`thanks @alice.`) still resolves.
+* You can mention more than one user in a single note.
+
+You can @mention users from the UI in notes on **Findings**, **Tests**, **Engagements** and **Risk Acceptances**. Typing `@` opens a list of matching users; picking one from that list is the reliable way to mention someone, because it inserts the username exactly as the notification lookup expects it.
+
+The mention is delivered through the `user_mentioned` notification event. See [Notifications](/admin/notifications/about_notifications/) for how notifications are delivered and configured — in particular, `user_mentioned` is one of the events a system-level setting can still deliver even when a user has otherwise quieted their notifications (see [Specific overrides](/admin/notifications/about_notifications/#specific-overrides)).
+
+## Example Finding Workflows
+
+How you work with Findings in DefectDojo depends on your team’s responsibilities within your organization. Here are some examples of these processes, and how DefectDojo can help:
+
+### Discover and Report vulnerabilities
+
+If you’re in charge of security reporting for many different contexts, software Assets or teams, DefectDojo can report on those vulnerabilities uncovered. Using the Asset Hierarchy, you can organize your Finding data into the appropriate context. For example:
+
+* Each Asset in DefectDojo can have a different SLA configuration, so that you can instantly flag Findings that are discovered in Production or other highly sensitive environments.
+* You can create a report directly from a **Organization, Asset, Engagement or Test** to ‘zoom in and out’ of your security context. **Tests** contain results from a single tool, **Engagements** can combine multiple Tests, **Assets** can contain multiple Engagements, **Organizations** can contain multiple Assets.
+
+For more information on creating a Report, see our guides to **[Custom Reporting](/metrics_reports/reports/)**.
+
+### Triage Vulnerabilities using Finding Status
+
+If your team needs to validate the Findings discovered, you can do so by manually applying the **Verified** status to Findings as you review them. You can also apply other statuses, such as:
+
+* **False Positive:** A tool detected the threat, but the threat is not active in the environment.
+* **Out Of Scope:** Active, but irrelevant to the current testing effort.
+* **Risk Accepted:** Active, but determined not to be a priority to address until the Risk Acceptance expires.
+* **Under Review:** may or may not be Active \- your team is still investigating.
+* **Mitigated:** This issue has been resolved since the Finding was created.
+
+If a tool reports a previously triaged Finding on a subsequent import, DefectDojo will remember the Finding’s previous status and update accordingly. Findings with **False Positive**, **Out Of Scope, Risk Accepted and Under Review** statuses will remain as they are, but any Finding that has been **Mitigated** will be **reactivated** to let you know that the Finding has returned to the Test environment.
+
+### Ensure Team\-wide Consensus and Accountability with Risk Acceptances
+
+Part of a security team’s responsibility is to collaborate with developers to prioritize and deprioritize security issue remediation. This is where Risk Acceptances come in. Adding a Risk Acceptance to a Finding allows you to:
+
+* Store records and ‘artifact’ files on DefectDojo \- these could be emails from colleagues acknowledging the Risk Acceptance, meeting notes, or simply a written justification for accepting the risk from your own security team.
+* Add an expiration date to the Risk Acceptance, so that the vulnerability can be re\-examined after a given period of time.
+
+Any Appsec team member understands that issue mitigation can’t be prioritized exclusively by developer teams, so Risk Acceptances help you log those sensitive decisions when they are made.
+
+### Monitor current vulnerabilities using CVEs and EPSS scores (Pro Feature)
+
+Sometimes, the exploitability and threat posed by a known vulnerability can change based on new data. To keep your work up to date, DefectDojo Pro has partnered with First.org to maintain a database of the latest EPSS scores related to Findings. Any Findings in DefectDojo Pro will be kept up to date automatically according to their EPSS, which is directly based on the CVE of the Finding.
+
+If a Finding’s EPSS score changes (i.e. the related Finding becomes more exploitable or less exploitable), the Severity of the Finding will adjust accordingly.

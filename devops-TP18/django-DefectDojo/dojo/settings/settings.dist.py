@@ -1,0 +1,2363 @@
+# noqa: N999 - see https://github.com/DefectDojo/django-DefectDojo/pull/11647
+#########################################################################################################
+# It is not recommended to edit file 'settings.dist.py', for production deployments.                        #
+# Any customization of variables need to be done via environmental variables or in 'local_settings.py'. #
+# For more information check https://documentation.defectdojo.com/getting_started/configuration/        #
+#########################################################################################################
+
+# Django settings for DefectDojo
+import json
+import logging
+import os
+import warnings
+from datetime import timedelta
+from email.utils import getaddresses
+from pathlib import Path
+
+import environ
+from celery.schedules import crontab
+
+from dojo import __version__
+from dojo.auditlog.settings import (  # noqa: F401 -- re-exported as Django settings
+    AUDITLOG_DISABLE_ON_RAW_SAVE,
+    PGHISTORY_CONTEXT_FIELD,
+    PGHISTORY_FOREIGN_KEY_FIELD,
+    PGHISTORY_OBJ_FIELD,
+)
+from dojo.auditlog.settings import ENV_SCHEMA as AUDITLOG_ENV_SCHEMA
+from dojo.notifications.settings import (
+    NOTIFICATIONS_ENV_DEFAULTS,
+)
+from dojo.notifications.settings import (
+    populate_settings as _populate_notifications_settings,
+)
+
+logger = logging.getLogger(__name__)
+
+root = environ.Path(__file__) - 3  # Three folders back
+
+# reference: https://pypi.org/project/django-environ/
+env = environ.FileAwareEnv(
+    # Set casting and default values
+    DD_SITE_URL=(str, "http://localhost:8080"),
+    DD_DEBUG=(bool, False),
+    DD_DJANGO_DEBUG_TOOLBAR_ENABLED=(bool, False),
+    # django-jsonfield-backport raises a warning that can be ignored,
+    # see https://github.com/laymonage/django-jsonfield-backport
+    # debug_toolbar.E001 is raised when running tests in dev mode via run-unittests.sh
+    DD_SILENCED_SYSTEM_CHECKS=(list, ["debug_toolbar.E001", "django_jsonfield_backport.W001", "polymorphic.W001", "polymorphic.W002"]),
+    DD_TEMPLATE_DEBUG=(bool, False),
+    DD_LOG_LEVEL=(str, ""),
+    DD_DJANGO_METRICS_ENABLED=(bool, False),
+    DD_LOGIN_REDIRECT_URL=(str, "/"),
+    DD_LOGIN_URL=(str, "/login"),
+    DD_DJANGO_ADMIN_ENABLED=(bool, False),
+    DD_SESSION_COOKIE_HTTPONLY=(bool, True),
+    DD_CSRF_COOKIE_HTTPONLY=(bool, True),
+    DD_SECURE_SSL_REDIRECT=(bool, False),
+    DD_SECURE_CROSS_ORIGIN_OPENER_POLICY=(str, "same-origin"),
+    DD_SECURE_HSTS_INCLUDE_SUBDOMAINS=(bool, False),
+    DD_SECURE_HSTS_SECONDS=(int, 31536000),  # One year expiration
+    DD_SESSION_COOKIE_SECURE=(bool, False),
+    DD_SESSION_EXPIRE_AT_BROWSER_CLOSE=(bool, False),
+    DD_SESSION_EXPIRE_WARNING=(int, 300),  # warning 5 mins before expiration
+    DD_SESSION_COOKIE_AGE=(int, 1209600),  # 14 days
+    DD_CSRF_COOKIE_SECURE=(bool, False),
+    DD_CSRF_TRUSTED_ORIGINS=(list, []),
+    DD_SECURE_CONTENT_TYPE_NOSNIFF=(bool, True),
+    DD_CSRF_COOKIE_SAMESITE=(str, "Lax"),
+    DD_SESSION_COOKIE_SAMESITE=(str, "Lax"),
+    DD_APPEND_SLASH=(bool, True),
+    DD_TIME_ZONE=(str, "UTC"),
+    DD_LANG=(str, "en-us"),
+    DD_TEAM_NAME=(str, "Security Team"),
+    DD_ADMINS=(str, "DefectDojo:dojo@localhost,Admin:admin@localhost"),
+    DD_WHITENOISE=(bool, False),
+    DD_TRACK_MIGRATIONS=(bool, True),
+    DD_SECURE_PROXY_SSL_HEADER=(bool, False),
+    DD_TEST_RUNNER=(str, "django.test.runner.DiscoverRunner"),
+    DD_URL_PREFIX=(str, ""),
+    DD_ROOT=(str, root("dojo")),
+    DD_LANGUAGE_CODE=(str, "en-us"),
+    DD_SITE_ID=(int, 1),
+    DD_USE_I18N=(bool, True),
+    DD_USE_TZ=(bool, True),
+    DD_MEDIA_URL=(str, "/media/"),
+    DD_MEDIA_ROOT=(str, root("media")),
+    DD_STATIC_URL=(str, "/static/"),
+    DD_STATIC_ROOT=(str, root("static")),
+    DD_CELERY_BROKER_URL=(str, ""),
+    DD_CELERY_BROKER_SCHEME=(str, "sqla+sqlite"),
+    DD_CELERY_BROKER_USER=(str, ""),
+    DD_CELERY_BROKER_PASSWORD=(str, ""),
+    DD_CELERY_BROKER_HOST=(str, ""),
+    DD_CELERY_BROKER_PORT=(int, -1),
+    DD_CELERY_BROKER_PATH=(str, "/dojo.celerydb.sqlite"),
+    DD_CELERY_BROKER_PARAMS=(str, ""),
+    DD_CELERY_BROKER_TRANSPORT_OPTIONS=(str, ""),
+    DD_CELERY_TASK_IGNORE_RESULT=(bool, True),
+    # Max seconds the 'async_wait' deduplication execution mode will wait for
+    # background deduplication/post-processing to finish before responding anyway.
+    DD_DEDUPLICATION_ASYNC_WAIT_TIMEOUT=(int, 60),
+    # Test-only: artificial delay (seconds) injected at the start of
+    # post_process_findings_batch so integration tests can deterministically
+    # observe that 'async_wait' blocks on deduplication while 'async' does not.
+    # Must stay 0 in production. The _FILTER (a finding-title prefix) scopes the
+    # delay to a single test's findings so unrelated dedupe tests are not slowed.
+    DD_DEDUPLICATION_BATCH_PROCESS_TEST_DELAY=(int, 0),
+    DD_DEDUPLICATION_BATCH_PROCESS_TEST_DELAY_FILTER=(str, ""),
+    DD_CELERY_RESULT_BACKEND=(str, "django-db"),
+    DD_CELERY_RESULT_EXPIRES=(int, 86400),
+    DD_CELERY_BEAT_SCHEDULE_FILENAME=(str, root("dojo.celery.beat.db")),
+    DD_CELERY_TASK_SERIALIZER=(str, "json"),
+    DD_CELERY_LOG_LEVEL=(str, "INFO"),
+    # Hard ceiling on task runtime. When reached, the worker process is sent SIGKILL — no cleanup
+    # code runs. Always set higher than DD_CELERY_TASK_SOFT_TIME_LIMIT. (0 = disabled, no limit)
+    DD_CELERY_TASK_TIME_LIMIT=(int, 43200),        # default: 12 hours
+    # Raises SoftTimeLimitExceeded inside the task, giving it a chance to clean up before the hard
+    # kill. Set a few seconds below DD_CELERY_TASK_TIME_LIMIT so cleanup has time to finish.
+    # (0 = disabled, no limit)
+    DD_CELERY_TASK_SOFT_TIME_LIMIT=(int, 0),
+    # If a task sits in the broker queue for longer than this without being picked up by a worker,
+    # Celery silently discards it — it is never executed and no exception is raised. Does not
+    # affect tasks that are already running. (0 = disabled, no limit)
+    DD_CELERY_TASK_DEFAULT_EXPIRES=(int, 43200),   # default: 12 hours
+    # A product's grade is recalculated at most once per this many seconds: the first finding change
+    # in a window queues one calculate_grade task with this countdown, and later changes in the same
+    # window are no-ops. 0 queues a task for every change.
+    DD_PRODUCT_GRADE_DEBOUNCE_SECONDS=(int, 30),
+    DD_TAG_BULK_ADD_BATCH_SIZE=(int, 1000),
+    # Tagulous slug truncate unique setting. Set to -1 to use tagulous internal default (5)
+    DD_TAGULOUS_SLUG_TRUNCATE_UNIQUE=(int, -1),
+    # Master switch for django-watson. When True (default) the post-save/pre-delete
+    # search indexers are registered on 9 models (write-amplification on every save,
+    # Finding imports especially) and the legacy /simple_search page (watson's only
+    # reader) is served. When False, nothing is registered, /simple_search returns
+    # 410 Gone, and installwatson is skipped. Pro ships this False: its native
+    # Postgres search (pro/search/) fully replaces watson.
+    DD_WATSON_SEARCH_ENABLED=(bool, True),
+    # Batch size for async watson search-index update tasks. Also doubles as
+    # the per-request intermediate-flush threshold: once the in-memory watson
+    # context reaches this many pending objects mid-request,
+    # AsyncSearchContextMiddleware flushes them to async celery tasks instead
+    # of waiting for end-of-request. Set to 0 (or negative) to disable the
+    # intermediate flush.
+    DD_WATSON_ASYNC_INDEX_UPDATE_BATCH_SIZE=(int, 1000),
+    # When True, the async watson indexer auto-derives select_related/prefetch_related
+    # paths from each adapter's `fields`/`store` to avoid N+1 queries during indexing.
+    # Falls back to a plain queryset on any error (logged).
+    DD_WATSON_INDEX_PREFETCH_ENABLED=(bool, True),
+    DD_FOOTER_VERSION=(str, ""),
+    # Toggle for the highly accessible notice at the top of forms ("Required fields are marked with an asterisk*")
+    DD_SHOW_A11Y_REQUIRED_FIELDS_NOTICE=(bool, True),
+    DD_DATABASE_ENGINE=(str, "django.db.backends.postgresql"),
+    DD_DATABASE_HOST=(str, "postgres"),
+    DD_DATABASE_NAME=(str, "defectdojo"),
+    # default django database name for testing is test_<dbname>
+    DD_TEST_DATABASE_NAME=(str, "test_defectdojo"),
+    DD_DATABASE_PASSWORD=(str, "defectdojo"),
+    DD_DATABASE_PORT=(int, 3306),
+    DD_DATABASE_USER=(str, "defectdojo"),
+    DD_SECRET_KEY=(str, ""),
+    DD_CREDENTIAL_AES_256_KEY=(str, "."),
+    DD_DATA_UPLOAD_MAX_MEMORY_SIZE=(int, 8388608),  # Max post size set to 8mb
+    DD_DATA_UPLOAD_MAX_NUMBER_FIELDS=(int, 10240),  # Max number of GET/POST parameters in a request
+    DD_MAX_ZIP_MEMBERS=(int, 1000),
+    DD_MAX_ZIP_MEMBER_SIZE=(int, 512 * 1024 * 1024),  # 512 MB per member (uncompressed)
+    DD_MAX_ZIP_TOTAL_SIZE=(int, 1 * 1024 * 1024 * 1024),  # 1 GB total (uncompressed)
+    DD_MAX_ZIP_RATIO=(int, 100),  # max compression ratio (uncompressed / compressed)
+    DD_FORGOT_PASSWORD=(bool, True),  # do we show link "I forgot my password" on login screen
+    DD_PASSWORD_RESET_TIMEOUT=(int, 259200),  # 3 days, in seconds (the deafult)
+    DD_FORGOT_USERNAME=(bool, True),  # do we show link "I forgot my username" on login screen
+    DD_OS_MESSAGE_ENABLED=(bool, True),  # show the open-source "Upgrade to Pro" / OS message promo banner
+    # Some security policies require allowing users to have only one active session
+    DD_SINGLE_USER_SESSION=(bool, False),
+    # if somebody is using own documentation how to use DefectDojo in his own company
+    DD_DOCUMENTATION_URL=(str, "https://documentation.defectdojo.com"),
+    # merging findings doesn't always work well with dedupe and reimport etc.
+    # disable it if you see any issues (and report them on github)
+    DD_DISABLE_FINDING_MERGE=(bool, False),
+    # SLA Notifications via alerts and JIRA comments
+    # enable either DD_SLA_NOTIFY_ACTIVE or DD_SLA_NOTIFY_ACTIVE_VERIFIED_ONLY to enable the feature.
+    # If desired you can enable to only notify for Findings that are linked to JIRA issues.
+    # SLA + alert + notification env-var schema lives in dojo/notifications/settings.py.
+    # maximum number of result in search as search can be an expensive operation
+    DD_SEARCH_MAX_RESULTS=(int, 100),
+    DD_SIMILAR_FINDINGS_MAX_RESULTS=(int, 25),
+    # The maximum number of request/response pairs to return from the API. Values <0 return all pairs.
+    DD_MAX_REQRESP_FROM_API=(int, -1),
+    DD_MAX_AUTOCOMPLETE_WORDS=(int, 20000),
+    DD_JIRA_SSL_VERIFY=(bool, True),
+    DD_JIRA_DESCRIPTION_MAX_LENGTH=(int, 32767),
+    # When interacting with jira tickets that attached finding groups, we should no be opening any findings
+    # on the DefectDojo side because jira has no way of knowing if a finding really should be reopened or not
+    DD_JIRA_WEBHOOK_ALLOW_FINDING_GROUP_REOPEN=(bool, False),
+    # JIRA connection retry and timeout settings: https://developer.atlassian.com/cloud/jira/platform/rate-limiting/
+    # Maximum number of retry attempts for recoverable errors (429, 503, ConnectionError)
+    # See https://jira.readthedocs.io/ for more in the jira library used by DefectDojo
+    # Note: The jira library has a built-in maximum wait time of 60s for rate limiting retries.
+    # If JIRA's Retry-After header indicates a wait time longer than 60s, the request will fail and not be retried.
+    DD_JIRA_MAX_RETRIES=(int, 3),
+    # Connection timeout (seconds) for establishing a connection to the JIRA server
+    DD_JIRA_CONNECT_TIMEOUT=(int, 10),
+    # Read timeout (seconds) for waiting for a response from the JIRA server
+    DD_JIRA_READ_TIMEOUT=(int, 30),
+    # You can set extra Jira issue types via a simple env var that supports a csv format, like "Work Item,Vulnerability"
+    DD_JIRA_EXTRA_ISSUE_TYPES=(str, ""),
+    # if you want to keep logging to the console but in json format, change this here to 'json_console'
+    DD_LOGGING_HANDLER=(str, "console"),
+    # If true, drf-spectacular will load CSS & JS from default CDN, otherwise from static resources
+    DD_DEFAULT_SWAGGER_UI=(bool, False),
+    DD_TAG_PREFETCHING=(bool, True),
+    DD_QUALYS_WAS_WEAKNESS_IS_VULN=(bool, False),
+    # Give each Qualys WAS finding the scanner's UNIQUE_ID instead of grouping findings by QID
+    DD_QUALYS_WAS_UNIQUE_ID=(bool, False),
+    # regular expression to exclude one or more parsers
+    # could be usefull to limit parser allowed
+    # AWS Scout2 Scan Parser is deprecated (see https://github.com/DefectDojo/django-DefectDojo/pull/5268)
+    # when enabled in sytem settings,  every minute a job run to delete excess duplicates
+    # we limit the amount of duplicates that can be deleted in a single run of that job
+    # to prevent overlapping runs of that job from occurrring
+    DD_DUPE_DELETE_MAX_PER_RUN=(int, 200),
+    # When enabled, superusers can edit a finding's 'mitigated date' and 'mitigated by'
+    # fields (e.g. backdate a mitigation) from both the UI and the API. Off by default
+    # because backdating a mitigation can distort SLA-compliance metrics. Changing this
+    # value requires a service restart to take effect.
+    DD_EDITABLE_MITIGATED_DATA=(bool, False),
+    # new feature that tracks history across multiple reimports for the same test
+    DD_TRACK_IMPORT_HISTORY=(bool, True),
+    # Batch size for reimport candidate matching (finding existing findings)
+    DD_IMPORT_REIMPORT_MATCH_BATCH_SIZE=(int, 1000),
+    # Batch size for import/reimport deduplication processing
+    DD_IMPORT_REIMPORT_DEDUPE_BATCH_SIZE=(int, 1000),
+    # Batch size for Redis pipeline when purging the Celery queue by task name
+    DD_CELERY_QUEUE_PURGE_BATCH_SIZE=(int, 1000),
+    # Maximum number of tasks to purge in a single per-task purge action
+    DD_CELERY_QUEUE_PURGE_MAX_TASKS=(int, 10000),
+    # Audit-log env-var schema (DD_ENABLE_AUDITLOG, DD_AUDITLOG_FLUSH_*) sourced
+    # from dojo/auditlog/settings.py.
+    **AUDITLOG_ENV_SCHEMA,
+    # Allow grouping of findings in the same test, for example to group findings per dependency
+    # DD_FEATURE_FINDING_GROUPS feature is moved to system_settings, will be removed from settings file
+    DD_FEATURE_FINDING_GROUPS=(bool, True),
+    DD_JIRA_TEMPLATE_ROOT=(str, "dojo/templates/issue-trackers"),
+    DD_TEMPLATE_DIR_PREFIX=(str, "dojo/templates/"),
+    DD_DUPLICATE_CLUSTER_CASCADE_DELETE=(bool, False),
+    # Enable Rate Limiting for the login page
+    DD_RATE_LIMITER_ENABLED=(bool, False),
+    # Account-recovery emails (password reset, forgot username) sent to one address per hour. 0 disables the limit.
+    DD_ACCOUNT_RECOVERY_EMAILS_PER_HOUR=(int, 5),
+    # Examples include 5/m 100/h and more https://django-ratelimit.readthedocs.io/en/stable/rates.html#simple-rates
+    DD_RATE_LIMITER_RATE=(str, "5/m"),
+    # Block the requests after rate limit is exceeded
+    DD_RATE_LIMITER_BLOCK=(bool, False),
+    # Forces the user to change password on next login.
+    DD_RATE_LIMITER_ACCOUNT_LOCKOUT=(bool, False),
+    # when enabled SonarQube API parser will download the security hotspots
+    DD_SONARQUBE_API_PARSER_HOTSPOTS=(bool, True),
+    # When enabled, deleting objects will be occur from the bottom up. In the example of deleting an engagement
+    # The objects will be deleted as follows Endpoints -> Findings -> Tests -> Engagement
+    DD_ASYNC_OBJECT_DELETE=(bool, False),
+    # The number of objects to be deleted per celeryworker
+    DD_ASYNC_OBEJECT_DELETE_CHUNK_SIZE=(int, 100),
+    # When enabled, display the preview of objects to be deleted. This can take a long time to render
+    # for very large objects
+    DD_DELETE_PREVIEW=(bool, True),
+    # List of acceptable file types that can be uploaded to a given object via arbitrary file upload
+    DD_FILE_UPLOAD_TYPES=(list, [".txt", ".pdf", ".json", ".xml", ".csv", ".yml", ".png", ".jpeg",
+                                 ".sarif", ".xlsx", ".doc", ".html", ".js", ".nessus", ".zip", ".fpr"]),
+    # List of acceptable file types that can be (re)imported
+    DD_FILE_IMPORT_TYPES=(list, [".xml", ".csv", ".nessus", ".json", ".jsonl", ".html", ".js", ".zip",
+                                 ".xlsx", ".txt", ".sarif", ".fpr", ".md", ".log", ".fvdl", ".spdx"]),
+    # Max file size for scan added via API in MB
+    DD_SCAN_FILE_MAX_SIZE=(int, 100),
+    # When disabled, existing user tokens will not be removed but it will not be
+    # possible to create new and it will not be possible to use exising.
+    DD_API_TOKENS_ENABLED=(bool, True),
+    # Enable endpoint which allow user to get API token when user+pass is provided
+    DD_API_TOKEN_AUTH_ENDPOINT_ENABLED=(bool, True),
+    # Default token lifetime in days. 0 = no expiry (tokens last forever).
+    DD_API_TOKEN_DEFAULT_EXPIRY_DAYS=(int, 0),
+    # You can set extra Jira headers by suppling a dictionary in header: value format (pass as env var like "headr_name=value,another_header=anohter_value")
+    DD_ADDITIONAL_HEADERS=(dict, {}),
+    # Set fields used by the hashcode generator for deduplication, via en env variable that contains a JSON string
+    DD_HASHCODE_FIELDS_PER_SCANNER=(str, ""),
+    # Set deduplication algorithms per parser, via en env variable that contains a JSON string
+    DD_DEDUPLICATION_ALGORITHM_PER_PARSER=(str, ""),
+    # When True, hash_code mass updates use the PostgreSQL VALUES-join fast writer
+    # (falls back to bulk_update on other backends). Set False to always use bulk_update.
+    DD_MASS_HASH_CODE_USE_SQL_WRITER=(bool, True),
+    # Specifies whether the "first seen" date of a given report should be used over the "last seen" date
+    DD_USE_FIRST_SEEN=(bool, False),
+    # When set to True, use the older version of the qualys parser that is a more heavy handed in setting severity
+    # with the use of CVSS scores to potentially override the severity found in the report produced by the tool
+    DD_QUALYS_LEGACY_SEVERITY_PARSING=(bool, True),
+    # When enabled, force the password field to be required for creating/updating users
+    DD_REQUIRE_PASSWORD_ON_USER=(bool, True),
+    # For HTTP requests, how long connection is open before timeout
+    # This settings apply only on requests performed by "requests" lib used in Dojo code (if some included lib is using "requests" as well, this does not apply there)
+    DD_REQUESTS_TIMEOUT=(int, 30),
+    # Dictates if v3 functionality will be enabled (on by default as of 3.0.0; set to False to revert to the legacy Endpoint model)
+    DD_V3_FEATURE_LOCATIONS=(bool, True),
+    # API v3 (alpha) list pagination: threshold below which `count` is exact; above it the
+    # response reports the Postgres planner's row estimate (flagged count_exact=false). See §4.3.
+    DD_API_V3_COUNT_CAP=(int, 10000),
+    # API v3 (alpha) ?expand= guard: maximum number of expanded relation nodes across all paths. See §4.6.
+    DD_API_V3_EXPAND_BUDGET=(int, 10),
+    # API v3 (alpha) CSV export row cap: the whole filtered set is streamed as CSV; if the filtered
+    # count exceeds this cap the request is a 400 telling the client to narrow the filter (never a
+    # silent truncation). See §4.15.
+    DD_API_V3_EXPORT_MAX_ROWS=(int, 100000),
+    # Dictates if v3 org/asset relabeling (+url routing) will be enabled (on by default as of 3.0.0; set to False to restore Product/Product Type labels and URLs)
+    DD_ENABLE_V3_ORGANIZATION_ASSET_RELABEL=(bool, True),
+    # Shared cache backend (django.core.cache). When set, Django uses RedisCache
+    # (e.g. redis://valkey:6379/1); when empty it falls back to LocMemCache. Used
+    # by general framework caching; the singleton settings cache (dojo/caching.py)
+    # is in-process only and does not read or write this backend.
+    DD_CACHE_URL=(str, ""),
+    # In-process (L1) read-through cache for global singleton getters (see
+    # dojo/caching.py). Per-thread freshness budget in seconds; -1 disables it.
+    # Reset every request/task, so each request/task reads the singleton once.
+    DD_SETTINGS_CACHE_L1_TTL=(int, 30),
+    # Notification env-vars (SLA notify, alert refresh/counter/cap, system-level trump). Defined in dojo.notifications.settings.
+    **NOTIFICATIONS_ENV_DEFAULTS,
+)
+
+
+def generate_url(scheme, double_slashes, user, password, host, port, path, params):
+    result_list = []
+    result_list.extend((scheme, ":"))
+    if double_slashes:
+        result_list.append("//")
+    result_list.append(user)
+    if len(password) > 0:
+        result_list.extend((":", password))
+    if len(user) > 0 or len(password) > 0:
+        result_list.append("@")
+    result_list.append(host)
+    if port >= 0:
+        result_list.extend((":", str(port)))
+    if len(path) > 0 and path[0] != "/":
+        result_list.append("/")
+    result_list.append(path)
+    if len(params) > 0 and params[0] != "?":
+        result_list.append("?")
+    result_list.append(params)
+    return "".join(result_list)
+
+
+# Read .env file as default or from the command line, DD_ENV_PATH
+if Path(root("dojo/settings/.env.prod")).is_file() or "DD_ENV_PATH" in os.environ:
+    env.read_env(root("dojo/settings/" + env.str("DD_ENV_PATH", ".env.prod")))
+
+# ------------------------------------------------------------------------------
+# GENERAL
+# ------------------------------------------------------------------------------
+
+# False if not in os.environ
+DEBUG = env("DD_DEBUG")
+DJANGO_DEBUG_TOOLBAR_ENABLED = env("DD_DJANGO_DEBUG_TOOLBAR_ENABLED")
+TEMPLATE_DEBUG = env("DD_TEMPLATE_DEBUG")
+
+# Hosts/domain names that are valid for this site; required if DEBUG is False
+# See https://docs.djangoproject.com/en/2.0/ref/settings/#allowed-hosts
+SITE_URL = env("DD_SITE_URL")
+ALLOWED_HOSTS = tuple(env.list("DD_ALLOWED_HOSTS", default=["localhost", "127.0.0.1"]))
+
+# Raises django's ImproperlyConfigured exception if SECRET_KEY not in os.environ
+SECRET_KEY = env("DD_SECRET_KEY")
+
+# Default cache backend (django.core.cache). Redis when DD_CACHE_URL is set,
+# else per-process LocMemCache. General framework caching only; the singleton
+# settings cache (dojo/caching.py) is in-process and does not use this backend.
+if env("DD_CACHE_URL"):
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": env("DD_CACHE_URL"),
+        },
+    }
+
+# In-process singleton cache (dojo/caching.py)
+SETTINGS_CACHE_L1_TTL = env("DD_SETTINGS_CACHE_L1_TTL")
+
+# Local time zone for this installation. Choices can be found here:
+# http://en.wikipedia.org/wiki/List_of_tz_zones_by_name
+# although not all choices may be available on all operating systems.
+# In a Windows environment this must be set to your system time zone.
+TIME_ZONE = env("DD_TIME_ZONE")
+
+# Language code for this installation. All choices can be found here:
+# http://www.i18nguy.com/unicode/language-identifiers.html
+LANGUAGE_CODE = env("DD_LANGUAGE_CODE")
+
+SITE_ID = env("DD_SITE_ID")
+
+# If you set this to False, Django will make some optimizations so as not
+# to load the internationalization machinery.
+USE_I18N = env("DD_USE_I18N")
+
+# Languages offered in the UI. Stored DB values and serialized API values always
+# remain English regardless of the selected language; only displayed text changes.
+LANGUAGES = [
+    ("en", "English"),
+    ("ar", "العربية"),
+    ("bn", "বাংলা"),
+    ("de", "Deutsch"),
+    ("es", "Español"),
+    ("fa", "فارسی"),
+    ("fr", "Français"),
+    ("he", "עברית"),
+    ("hi", "हिन्दी"),
+    ("id", "Bahasa Indonesia"),
+    ("it", "Italiano"),
+    ("ja", "日本語"),
+    ("ko", "한국어"),
+    ("mr", "मराठी"),
+    ("nl", "Nederlands"),
+    ("pl", "Polski"),
+    ("pt-br", "Português (Brasil)"),
+    ("ru", "Русский"),
+    ("ta", "தமிழ்"),
+    ("te", "తెలుగు"),
+    ("th", "ไทย"),
+    ("tl", "Filipino"),
+    ("tr", "Türkçe"),
+    ("uk", "Українська"),
+    ("ur", "اردو"),
+    ("vi", "Tiếng Việt"),
+    ("zh-hans", "简体中文"),
+    ("zh-hant", "繁體中文"),
+]
+# Arabic (ar), Hebrew (he), Persian (fa) and Urdu (ur) are right-to-left; the v3 UI flips
+# layout via dir="rtl" (set in base.html from LANGUAGE_BIDI) plus logical CSS utilities.
+# The classic UI is not RTL-aware.
+
+# If you set this to False, Django will not use timezone-aware datetimes.
+USE_TZ = env("DD_USE_TZ")
+
+TEST_RUNNER = env("DD_TEST_RUNNER")
+
+_populate_notifications_settings(env, globals())
+
+TAG_PREFETCHING = env("DD_TAG_PREFETCHING")
+# Tag bulk add batch size (used by dojo.tags.utils.bulk_add_tag_to_instances)
+TAG_BULK_ADD_BATCH_SIZE = env("DD_TAG_BULK_ADD_BATCH_SIZE")
+
+
+# ------------------------------------------------------------------------------
+# DATABASE
+# ------------------------------------------------------------------------------
+
+# Parse database connection url strings like psql://user:pass@127.0.0.1:8458/db
+if os.getenv("DD_DATABASE_URL") is not None:
+    DATABASES = {
+        "default": env.db("DD_DATABASE_URL"),
+    }
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": env("DD_DATABASE_ENGINE"),
+            "NAME": env("DD_DATABASE_NAME"),
+            "TEST": {
+                "NAME": env("DD_TEST_DATABASE_NAME"),
+            },
+            "USER": env("DD_DATABASE_USER"),
+            "PASSWORD": env("DD_DATABASE_PASSWORD"),
+            "HOST": env("DD_DATABASE_HOST"),
+            "PORT": env("DD_DATABASE_PORT"),
+        },
+    }
+
+# Track migrations through source control rather than making migrations locally
+if env("DD_TRACK_MIGRATIONS"):
+    MIGRATION_MODULES = {"dojo": "dojo.db_migrations"}
+
+# Default for automatically created id fields,
+# see https://docs.djangoproject.com/en/3.2/releases/3.2/#customizing-type-of-auto-created-primary-keys
+DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
+
+# ------------------------------------------------------------------------------
+# MEDIA
+# ------------------------------------------------------------------------------
+
+DOJO_ROOT = env("DD_ROOT")
+
+# Where Django looks for translation catalogs: dojo/locale/<lang>/LC_MESSAGES/.
+LOCALE_PATHS = [Path(DOJO_ROOT) / "locale"]
+
+# Absolute filesystem path to the directory that will hold user-uploaded files.
+# Example: "/var/www/example.com/media/"
+MEDIA_ROOT = env("DD_MEDIA_ROOT")
+
+# URL that handles the media served from MEDIA_ROOT. Make sure to use a
+# trailing slash.
+# Examples: "http://example.com/media/", "http://media.example.com/"
+MEDIA_URL = env("DD_MEDIA_URL")
+
+# ------------------------------------------------------------------------------
+# STATIC
+# ------------------------------------------------------------------------------
+
+# Absolute path to the directory static files should be collected to.
+# Don't put anything in this directory yourself; store your static files
+# in apps' "static/" subdirectories and in STATICFILES_DIRS.
+# Example: "/var/www/example.com/static/"
+STATIC_ROOT = env("DD_STATIC_ROOT")
+
+# URL prefix for static files.
+# Example: "http://example.com/static/", "http://static.example.com/"
+STATIC_URL = env("DD_STATIC_URL")
+
+# Additional locations of static files
+STATICFILES_DIRS = (
+    # Put strings here, like "/home/html/static" or "C:/www/django/static".
+    # Always use forward slashes, even on Windows.
+    # Don't forget to use absolute paths, not relative paths.
+    Path(DOJO_ROOT).parent / "components" / "node_modules",
+)
+
+# List of finder classes that know how to find static files in
+# various locations.
+STATICFILES_FINDERS = (
+    "django.contrib.staticfiles.finders.FileSystemFinder",
+    "django.contrib.staticfiles.finders.AppDirectoriesFinder",
+)
+
+FILE_UPLOAD_HANDLERS = (
+    "django.core.files.uploadhandler.TemporaryFileUploadHandler",
+)
+
+DATA_UPLOAD_MAX_MEMORY_SIZE = env("DD_DATA_UPLOAD_MAX_MEMORY_SIZE")
+MAX_ZIP_MEMBERS = env("DD_MAX_ZIP_MEMBERS")
+MAX_ZIP_MEMBER_SIZE = env("DD_MAX_ZIP_MEMBER_SIZE")
+MAX_ZIP_TOTAL_SIZE = env("DD_MAX_ZIP_TOTAL_SIZE")
+MAX_ZIP_RATIO = env("DD_MAX_ZIP_RATIO")
+
+# ------------------------------------------------------------------------------
+# URLS
+# ------------------------------------------------------------------------------
+# https://docs.djangoproject.com/en/dev/ref/settings/#root-urlconf
+
+# AUTHENTICATION_BACKENDS = [
+# 'axes.backends.AxesModelBackend',
+# ]
+
+ROOT_URLCONF = "dojo.urls"
+
+# Python dotted path to the WSGI application used by Django's runserver.
+# https://docs.djangoproject.com/en/dev/ref/settings/#wsgi-application
+WSGI_APPLICATION = "dojo.wsgi.application"
+
+URL_PREFIX = env("DD_URL_PREFIX")
+
+# ------------------------------------------------------------------------------
+# AUTHENTICATION
+# ------------------------------------------------------------------------------
+
+LOGIN_REDIRECT_URL = env("DD_LOGIN_REDIRECT_URL")
+LOGIN_URL = env("DD_LOGIN_URL")
+
+AUTHENTICATION_BACKENDS = (
+    "django.contrib.auth.backends.ModelBackend",
+)
+
+# Make Argon2 the default password hasher by listing it first
+# Unfortunately Django doesn't provide the default built-in
+# PASSWORD_HASHERS list here as a variable which we could modify,
+# so we have to list all the hashers present in Django :-(
+PASSWORD_HASHERS = [
+    "django.contrib.auth.hashers.Argon2PasswordHasher",
+    "django.contrib.auth.hashers.PBKDF2PasswordHasher",
+    "django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher",
+    "django.contrib.auth.hashers.BCryptSHA256PasswordHasher",
+    "django.contrib.auth.hashers.BCryptPasswordHasher",
+    "django.contrib.auth.hashers.MD5PasswordHasher",
+]
+
+CLASSIC_AUTH_ENABLED = True
+FORGOT_PASSWORD = env("DD_FORGOT_PASSWORD")
+REQUIRE_PASSWORD_ON_USER = env("DD_REQUIRE_PASSWORD_ON_USER")
+FORGOT_USERNAME = env("DD_FORGOT_USERNAME")
+PASSWORD_RESET_TIMEOUT = env("DD_PASSWORD_RESET_TIMEOUT")
+OS_MESSAGE_ENABLED = env("DD_OS_MESSAGE_ENABLED")
+
+DOCUMENTATION_URL = env("DD_DOCUMENTATION_URL")
+
+# Setting SLA_NOTIFY_ACTIVE and SLA_NOTIFY_ACTIVE_VERIFIED to False will disable the feature
+# If you import thousands of Active findings through your pipeline everyday,
+# and make the choice of enabling SLA notifications for non-verified findings,
+# be mindful of performance.
+# SLA_NOTIFY_* are populated by dojo.notifications.settings.populate_settings (see ALERT_REFRESH section above).
+
+
+SEARCH_MAX_RESULTS = env("DD_SEARCH_MAX_RESULTS")
+SIMILAR_FINDINGS_MAX_RESULTS = env("DD_SIMILAR_FINDINGS_MAX_RESULTS")
+MAX_REQRESP_FROM_API = env("DD_MAX_REQRESP_FROM_API")
+MAX_AUTOCOMPLETE_WORDS = env("DD_MAX_AUTOCOMPLETE_WORDS")
+ENABLE_AUDITLOG = env("DD_ENABLE_AUDITLOG")
+
+LOGIN_EXEMPT_URLS = (
+    rf"^{URL_PREFIX}static/",
+    rf"^{URL_PREFIX}webhook/([\w-]+)$",
+    rf"^{URL_PREFIX}webhook/",
+    rf"^{URL_PREFIX}jira/webhook/([\w-]+)$",
+    rf"^{URL_PREFIX}jira/webhook/",
+    rf"^{URL_PREFIX}finding/image/(?P<token>[^/]+)$",
+    rf"^{URL_PREFIX}api/v2/",
+    r"complete/",
+    r"empty_questionnaire/([\d]+)/answer",
+    r"oauth2/idpresponse",
+    rf"^{URL_PREFIX}password_reset/",
+    rf"^{URL_PREFIX}forgot_username",
+    rf"^{URL_PREFIX}reset/",
+)
+
+AUTH_PASSWORD_VALIDATORS = [
+    {
+        "NAME": "dojo.user.validators.DojoCommonPasswordValidator",
+    },
+    {
+        "NAME": "dojo.user.validators.MinLengthValidator",
+    },
+    {
+        "NAME": "dojo.user.validators.MaxLengthValidator",
+    },
+    {
+        "NAME": "dojo.user.validators.NumberValidator",
+    },
+    {
+        "NAME": "dojo.user.validators.UppercaseValidator",
+    },
+    {
+        "NAME": "dojo.user.validators.LowercaseValidator",
+    },
+    {
+        "NAME": "dojo.user.validators.SymbolValidator",
+    },
+]
+
+# https://django-ratelimit.readthedocs.io/en/stable/index.html
+RATE_LIMITER_ENABLED = env("DD_RATE_LIMITER_ENABLED")
+ACCOUNT_RECOVERY_EMAILS_PER_HOUR = env("DD_ACCOUNT_RECOVERY_EMAILS_PER_HOUR")
+RATE_LIMITER_RATE = env("DD_RATE_LIMITER_RATE")  # Examples include 5/m 100/h and more https://django-ratelimit.readthedocs.io/en/stable/rates.html#simple-rates
+RATE_LIMITER_BLOCK = env("DD_RATE_LIMITER_BLOCK")  # Block the requests after rate limit is exceeded
+RATE_LIMITER_ACCOUNT_LOCKOUT = env("DD_RATE_LIMITER_ACCOUNT_LOCKOUT")  # Forces the user to change password on next login.
+
+# ------------------------------------------------------------------------------
+# SECURITY DIRECTIVES
+# ------------------------------------------------------------------------------
+
+# If True, the SecurityMiddleware redirects all non-HTTPS requests to HTTPS
+# (except for those URLs matching a regular expression listed in SECURE_REDIRECT_EXEMPT).
+SECURE_SSL_REDIRECT = env("DD_SECURE_SSL_REDIRECT")
+
+# If True, the SecurityMiddleware sets the X-Content-Type-Options: nosniff;
+SECURE_CONTENT_TYPE_NOSNIFF = env("DD_SECURE_CONTENT_TYPE_NOSNIFF")
+
+# Whether to use HTTPOnly flag on the session cookie.
+# If this is set to True, client-side JavaScript will not to be able to access the session cookie.
+SESSION_COOKIE_HTTPONLY = env("DD_SESSION_COOKIE_HTTPONLY")
+
+# Whether to use HttpOnly flag on the CSRF cookie. If this is set to True,
+# client-side JavaScript will not to be able to access the CSRF cookie.
+CSRF_COOKIE_HTTPONLY = env("DD_CSRF_COOKIE_HTTPONLY")
+
+# Whether to use a secure cookie for the session cookie. If this is set to True,
+# the cookie will be marked as secure, which means browsers may ensure that the
+# cookie is only sent with an HTTPS connection.
+SESSION_COOKIE_SECURE = env("DD_SESSION_COOKIE_SECURE")
+SESSION_COOKIE_SAMESITE = env("DD_SESSION_COOKIE_SAMESITE")
+
+# Override default Django behavior for incorrect URLs
+APPEND_SLASH = env("DD_APPEND_SLASH")
+
+
+# Whether to use a secure cookie for the CSRF cookie.
+CSRF_COOKIE_SECURE = env("DD_CSRF_COOKIE_SECURE")
+CSRF_COOKIE_SAMESITE = env("DD_CSRF_COOKIE_SAMESITE")
+
+# A list of trusted origins for unsafe requests (e.g. POST).
+# Use comma-separated list of domains, they will be split to list automatically
+# Only specify this settings if the contents is not an empty list (the default)
+if env("DD_CSRF_TRUSTED_ORIGINS") != ["[]"]:
+    CSRF_TRUSTED_ORIGINS = env("DD_CSRF_TRUSTED_ORIGINS")
+
+# Unless set to None, the SecurityMiddleware sets the Cross-Origin Opener Policy
+# header on all responses that do not already have it to the value provided.
+SECURE_CROSS_ORIGIN_OPENER_POLICY = env("DD_SECURE_CROSS_ORIGIN_OPENER_POLICY") if env("DD_SECURE_CROSS_ORIGIN_OPENER_POLICY") != "None" else None
+
+if env("DD_SECURE_PROXY_SSL_HEADER"):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
+if env("DD_SECURE_HSTS_INCLUDE_SUBDOMAINS"):
+    SECURE_HSTS_SECONDS = env("DD_SECURE_HSTS_SECONDS")
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = env("DD_SECURE_HSTS_INCLUDE_SUBDOMAINS")
+
+SESSION_EXPIRE_AT_BROWSER_CLOSE = env("DD_SESSION_EXPIRE_AT_BROWSER_CLOSE")
+SESSION_EXPIRE_WARNING = env("DD_SESSION_EXPIRE_WARNING")
+SESSION_COOKIE_AGE = env("DD_SESSION_COOKIE_AGE")
+# Permission-Policy header settings
+# See docs at https://pypi.org/project/django-permissions-policy/
+PERMISSIONS_POLICY = {
+    "accelerometer": [],
+    "ambient-light-sensor": [],
+    "autoplay": [],
+    "camera": [],
+    "display-capture": [],
+    "encrypted-media": [],
+    "fullscreen": [],
+    "geolocation": [],
+    "gyroscope": [],
+    "interest-cohort": [],
+    "magnetometer": [],
+    "microphone": [],
+    "midi": [],
+    "payment": [],
+    "usb": [],
+}
+
+# ------------------------------------------------------------------------------
+# DEFECTDOJO SPECIFIC
+# ------------------------------------------------------------------------------
+
+ENABLE_V3_ORGANIZATION_ASSET_RELABEL = env("DD_ENABLE_V3_ORGANIZATION_ASSET_RELABEL")
+
+# Credential Key
+CREDENTIAL_AES_256_KEY = env("DD_CREDENTIAL_AES_256_KEY")
+DB_KEY = env("DD_CREDENTIAL_AES_256_KEY")
+
+# Used in a few places to prefix page headings and in email salutations
+TEAM_NAME = env("DD_TEAM_NAME")
+
+# Used to configure a custom version in the footer of the base.html template.
+FOOTER_VERSION = env("DD_FOOTER_VERSION")
+
+# Toggle for the highly accessible notice at the top of forms ("Required fields are marked with an asterisk*")
+SHOW_A11Y_REQUIRED_FIELDS_NOTICE = env("DD_SHOW_A11Y_REQUIRED_FIELDS_NOTICE")
+
+# V3 Feature Flags
+V3_FEATURE_LOCATIONS = env("DD_V3_FEATURE_LOCATIONS")
+
+# ------------------------------------------------------------------------------
+# API v3 (alpha)
+# ------------------------------------------------------------------------------
+# The API is mounted at /api/v3/ and stays there through beta and GA (no URL migration). It is an
+# alpha: the contract may change at any time. Alpha status is signaled by the OpenAPI version
+# (API_V3_VERSION), the X-API-Status header, and the docs banner -- not by the URL (D1/§4.1). This
+# is the single source of truth for the prefix and version string -- do not hardcode them anywhere.
+API_V3_URL_PREFIX = "api/v3"
+API_V3_VERSION = "3.0.0-alpha"
+API_V3_STATUS = "alpha"
+# Count/expand tuning (§4.3, §4.6); settings-overridable per the plan.
+API_V3_COUNT_CAP = env("DD_API_V3_COUNT_CAP")
+API_V3_EXPAND_BUDGET = env("DD_API_V3_EXPAND_BUDGET")
+# CSV export row cap (§4.15); settings-overridable per the plan.
+API_V3_EXPORT_MAX_ROWS = env("DD_API_V3_EXPORT_MAX_ROWS")
+# List pagination bounds (§4.3).
+API_V3_PAGE_LIMIT_DEFAULT = 25
+API_V3_PAGE_LIMIT_MAX = 250
+# v3 handles its own auth (token + session); exempt it from the UI login-redirect middleware
+# exactly as /api/v2/ is (so anonymous requests get a 401 problem+json, not a /login redirect).
+LOGIN_EXEMPT_URLS += (rf"^{URL_PREFIX}{API_V3_URL_PREFIX}/",)
+
+
+# ------------------------------------------------------------------------------
+# ADMIN
+# ------------------------------------------------------------------------------
+ADMINS = getaddresses([env("DD_ADMINS")])
+
+# https://docs.djangoproject.com/en/dev/ref/settings/#managers
+MANAGERS = ADMINS
+
+# Django admin enabled
+DJANGO_ADMIN_ENABLED = env("DD_DJANGO_ADMIN_ENABLED")
+
+# ------------------------------------------------------------------------------
+# API V2
+# ------------------------------------------------------------------------------
+
+API_TOKENS_ENABLED = env("DD_API_TOKENS_ENABLED")
+
+API_TOKEN_AUTH_ENDPOINT_ENABLED = env("DD_API_TOKEN_AUTH_ENDPOINT_ENABLED")
+API_TOKEN_DEFAULT_EXPIRY_DAYS = env("DD_API_TOKEN_DEFAULT_EXPIRY_DAYS")
+
+REST_FRAMEWORK = {
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+    "DEFAULT_AUTHENTICATION_CLASSES": (
+        "rest_framework.authentication.SessionAuthentication",
+        "dojo.user.authentication.DojoBasicAuthentication",
+    ),
+    "DEFAULT_PERMISSION_CLASSES": (
+        "rest_framework.permissions.DjangoModelPermissions",
+    ),
+    "DEFAULT_RENDERER_CLASSES": (
+        "rest_framework.renderers.JSONRenderer",
+    ),
+    "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.LimitOffsetPagination",
+    "PAGE_SIZE": 25,
+    "EXCEPTION_HANDLER": "dojo.api_v2.exception_handler.custom_exception_handler",
+}
+
+if API_TOKENS_ENABLED:
+    REST_FRAMEWORK["DEFAULT_AUTHENTICATION_CLASSES"] += ("dojo.user.authentication.ExpiringTokenAuthentication",)
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "DefectDojo API v2",
+    "DESCRIPTION": "DefectDojo - Open Source vulnerability Management made easy. Prefetch related parameters/responses not yet in the schema.",
+    "VERSION": __version__,
+    "SCHEMA_PATH_PREFIX": "/api/v2",
+    # OTHER SETTINGS
+    # the following set to False could help some client generators
+    # 'ENUM_ADD_EXPLICIT_BLANK_NULL_CHOICE': False,
+    "PREPROCESSING_HOOKS": ["dojo.urls.drf_spectacular_preprocessing_filter_spec"],
+    "POSTPROCESSING_HOOKS": ["dojo.api_v2.prefetch.schema.prefetch_postprocessing_hook"],
+    # show file selection dialogue, see https://github.com/tfranzel/drf-spectacular/issues/455
+    "COMPONENT_SPLIT_REQUEST": True,
+    "SWAGGER_UI_SETTINGS": {
+        "docExpansion": "none",
+    },
+}
+
+if not env("DD_DEFAULT_SWAGGER_UI"):
+    SPECTACULAR_SETTINGS["SWAGGER_UI_DIST"] = "SIDECAR"
+    SPECTACULAR_SETTINGS["SWAGGER_UI_FAVICON_HREF"] = "SIDECAR"
+
+# ------------------------------------------------------------------------------
+# TEMPLATES
+# ------------------------------------------------------------------------------
+
+# The UI lives in a single tree at dojo/templates/, searched ahead of the
+# sub-package template dirs (dojo/auditlog, dojo/notifications, dojo/github).
+# The list is shared by reference with the FilesystemLoader entry below, so any
+# late-binding settings can append a template dir at startup and have it
+# picked up at render time.
+_DOJO_TEMPLATE_DIRS = [
+    root("dojo/templates"),
+    root("dojo/auditlog/templates"),
+    root("dojo/notifications/templates"),
+    root("dojo/github/templates"),
+]
+
+# Mirrors what APP_DIRS=True would build, except that the filesystem dirs above
+# are searched first and the whole chain is wrapped in the cached loader outside
+# of debug mode.
+_DOJO_TEMPLATE_LOADERS = [
+    ("django.template.loaders.filesystem.Loader", _DOJO_TEMPLATE_DIRS),
+    "django.template.loaders.app_directories.Loader",
+]
+if not env("DD_DEBUG"):
+    _DOJO_TEMPLATE_LOADERS = [
+        ("django.template.loaders.cached.Loader", _DOJO_TEMPLATE_LOADERS),
+    ]
+
+TEMPLATES = [
+    {
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        # DIRS shares the _DOJO_TEMPLATE_DIRS list reference with the
+        # FilesystemLoader entry below; later append()s land in both places.
+        "DIRS": _DOJO_TEMPLATE_DIRS,
+        # APP_DIRS must stay False whenever "loaders" is set explicitly; the
+        # app_directories.Loader entry below covers the same ground.
+        "APP_DIRS": False,
+        "OPTIONS": {
+            "debug": env("DD_DEBUG"),
+            "loaders": _DOJO_TEMPLATE_LOADERS,
+            "context_processors": [
+                "django.template.context_processors.debug",
+                "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
+                "dojo.context_processors.globalize_vars",
+                "dojo.context_processors.bind_system_settings",
+                "dojo.notifications.context_processors.bind_alert_count",
+                "dojo.context_processors.bind_announcement",
+                "dojo.notifications.context_processors.session_expiry_notification",
+                "dojo.context_processors.labels",
+            ],
+        },
+    },
+]
+
+# ------------------------------------------------------------------------------
+# APPS
+# ------------------------------------------------------------------------------
+
+INSTALLED_APPS = (
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    # Registers the postgres-specific lookups and index expressions
+    # (trigram word similarity, tsvector search) used by global search.
+    "django.contrib.postgres",
+    "django.contrib.sessions",
+    "django.contrib.sites",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
+    "polymorphic",  # provides admin templates
+    "django.contrib.admin",
+    "django.contrib.humanize",
+    "dojo",
+    "watson",
+    "imagekit",
+    "multiselectfield",
+    "rest_framework",
+    "rest_framework.authtoken",
+    "dbbackup",
+    "django_celery_results",
+    "drf_spectacular",
+    "drf_spectacular_sidecar",  # required for Django collectstatic discovery
+    "django_tagulous",  # app_label stays "tagulous" (DB tables/static paths unaffected)
+    "fontawesomefree",
+    "django_filters",
+    "auditlog",
+    "pgtrigger",
+    "pghistory",
+    "single_session",
+    "django_htmx",
+)
+
+# ------------------------------------------------------------------------------
+# MIDDLEWARE
+# ------------------------------------------------------------------------------
+DJANGO_MIDDLEWARE_CLASSES = [
+    "django.middleware.common.CommonMiddleware",
+    "dojo.middleware.APITrailingSlashMiddleware",
+    "dojo.middleware.DojoSettingsManagerMiddleware",
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.middleware.locale.LocaleMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.middleware.security.SecurityMiddleware",
+    "django_permissions_policy.PermissionsPolicyMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "dojo.middleware.LanguagePreferenceMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "django_htmx.middleware.HtmxMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "dojo.middleware.LoginRequiredMiddleware",
+    "dojo.middleware.AdditionalHeaderMiddleware",
+    "crum.CurrentRequestUserMiddleware",
+    "dojo.authorization.middleware.AuthorizationMiddleware",
+    "dojo.middleware.AsyncSearchContextMiddleware",
+    "dojo.request_cache.middleware.RequestCacheMiddleware",
+    "dojo.middleware.LongRunningRequestAlertMiddleware",
+]
+
+MIDDLEWARE = DJANGO_MIDDLEWARE_CLASSES
+
+if ENABLE_AUDITLOG:
+    middleware_list = list(MIDDLEWARE)
+    crum_index = middleware_list.index("crum.CurrentRequestUserMiddleware")
+
+    # Insert pghistory HistoryMiddleware before CurrentRequestUserMiddleware
+    middleware_list.insert(crum_index, "dojo.middleware.PgHistoryMiddleware")
+
+    MIDDLEWARE = middleware_list
+
+# WhiteNoise allows your web app to serve its own static files,
+# making it a self-contained unit that can be deployed anywhere without relying on nginx
+if env("DD_WHITENOISE"):
+    WHITE_NOISE = [
+        # Simplified static file serving.
+        # https://warehouse.python.org/project/whitenoise/
+        "whitenoise.middleware.WhiteNoiseMiddleware",
+    ]
+    MIDDLEWARE += WHITE_NOISE
+
+# django-watson master switch (see DD_WATSON_SEARCH_ENABLED above). Pro ships this
+# off because its native Postgres search replaces watson; disabling strips the app
+# and its request-scoped indexing middleware so no post-save index writes happen
+# and installwatson is never needed.
+WATSON_SEARCH_ENABLED = env("DD_WATSON_SEARCH_ENABLED")
+if not WATSON_SEARCH_ENABLED:
+    INSTALLED_APPS = tuple(app for app in INSTALLED_APPS if app != "watson")
+    MIDDLEWARE = [m for m in MIDDLEWARE if m != "dojo.middleware.AsyncSearchContextMiddleware"]
+
+EMAIL_CONFIG = env.email_url(
+    "DD_EMAIL_URL", default="smtp://user@:password@localhost:25")
+
+vars().update(EMAIL_CONFIG)
+
+# ------------------------------------------------------------------------------
+# SINGLE_USER_SESSION
+# ------------------------------------------------------------------------------
+
+SESSION_ENGINE = "django.contrib.sessions.backends.db"
+SINGLE_USER_SESSION = env("DD_SINGLE_USER_SESSION")
+
+# ------------------------------------------------------------------------------
+# CELERY
+# ------------------------------------------------------------------------------
+
+# Celery settings
+CELERY_BROKER_URL = env("DD_CELERY_BROKER_URL") \
+    if len(env("DD_CELERY_BROKER_URL")) > 0 else generate_url(
+    scheme=env("DD_CELERY_BROKER_SCHEME"),
+    double_slashes=True,
+    user=env("DD_CELERY_BROKER_USER"),
+    password=env("DD_CELERY_BROKER_PASSWORD"),
+    host=env("DD_CELERY_BROKER_HOST"),
+    port=env("DD_CELERY_BROKER_PORT"),
+    path=env("DD_CELERY_BROKER_PATH"),
+    params=env("DD_CELERY_BROKER_PARAMS"),
+)
+CELERY_TASK_IGNORE_RESULT = env("DD_CELERY_TASK_IGNORE_RESULT")
+DEDUPLICATION_ASYNC_WAIT_TIMEOUT = env("DD_DEDUPLICATION_ASYNC_WAIT_TIMEOUT")
+DEDUPLICATION_BATCH_PROCESS_TEST_DELAY = env("DD_DEDUPLICATION_BATCH_PROCESS_TEST_DELAY")
+DEDUPLICATION_BATCH_PROCESS_TEST_DELAY_FILTER = env("DD_DEDUPLICATION_BATCH_PROCESS_TEST_DELAY_FILTER")
+CELERY_RESULT_BACKEND = env("DD_CELERY_RESULT_BACKEND")
+CELERY_TIMEZONE = TIME_ZONE
+CELERY_RESULT_EXPIRES = env("DD_CELERY_RESULT_EXPIRES")
+CELERY_BEAT_SCHEDULE_FILENAME = env("DD_CELERY_BEAT_SCHEDULE_FILENAME")
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = env("DD_CELERY_TASK_SERIALIZER")
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_LOG_LEVEL = env("DD_CELERY_LOG_LEVEL")
+PRODUCT_GRADE_DEBOUNCE_SECONDS = env("DD_PRODUCT_GRADE_DEBOUNCE_SECONDS")
+
+if env("DD_CELERY_TASK_TIME_LIMIT") > 0:
+    CELERY_TASK_TIME_LIMIT = env("DD_CELERY_TASK_TIME_LIMIT")
+if env("DD_CELERY_TASK_SOFT_TIME_LIMIT") > 0:
+    CELERY_TASK_SOFT_TIME_LIMIT = env("DD_CELERY_TASK_SOFT_TIME_LIMIT")
+if env("DD_CELERY_TASK_DEFAULT_EXPIRES") > 0:
+    CELERY_TASK_DEFAULT_EXPIRES = env("DD_CELERY_TASK_DEFAULT_EXPIRES")
+
+if len(env("DD_CELERY_BROKER_TRANSPORT_OPTIONS")) > 0:
+    CELERY_BROKER_TRANSPORT_OPTIONS = json.loads(env("DD_CELERY_BROKER_TRANSPORT_OPTIONS"))
+
+CELERY_IMPORTS = ("dojo.tools.tool_issue_updater", )
+
+# Watson async index update settings
+WATSON_ASYNC_INDEX_UPDATE_BATCH_SIZE = env("DD_WATSON_ASYNC_INDEX_UPDATE_BATCH_SIZE")
+WATSON_INDEX_PREFETCH_ENABLED = env("DD_WATSON_INDEX_PREFETCH_ENABLED")
+
+# Context managers wrapped around every Celery task by PluggableContextTask (see
+# dojo/celery.py). watson_search_context_for_task opens a watson search_context so bulk
+# finding saves that happen inside a worker task (which serves no HTTP request, so
+# AsyncSearchContextMiddleware never runs) accumulate and drain in batched async index
+# updates instead of indexing one finding at a time. Extend this list downstream (e.g. Pro)
+# rather than replacing it, so this batching stays wired.
+CELERY_TASK_CONTEXT_MANAGERS = [
+    "dojo.middleware.watson_search_context_for_task",
+]
+
+# Celery beat scheduled tasks
+CELERY_BEAT_SCHEDULE = {
+    "add-alerts": {
+        "task": "dojo.notifications.tasks.add_alerts",
+        "schedule": timedelta(hours=1),
+        "options": {
+            "expires": int(60 * 60 * 1 * 1.2),  # If a task is not executed within 72 minutes, it should be dropped from the queue. Two more tasks should be scheduled in the meantime.
+        },
+    },
+    "cleanup-alerts": {
+        "task": "dojo.notifications.tasks.cleanup_alerts",
+        "schedule": timedelta(hours=8),
+        "options": {
+            "expires": int(60 * 60 * 8 * 1.2),  # If a task is not executed within 9.6 hours, it should be dropped from the queue. Two more tasks should be scheduled in the meantime.
+        },
+    },
+    "dedupe-delete": {
+        "task": "dojo.tasks.async_dupe_delete",
+        "schedule": timedelta(minutes=1),
+        "options": {
+            "expires": int(60 * 1 * 1.2),  # If a task is not executed within 72 seconds, it should be dropped from the queue. Two more tasks should be scheduled in the meantime.
+        },
+    },
+    "flush_auditlog": {
+        "task": "dojo.tasks.flush_auditlog",
+        "schedule": timedelta(hours=8),
+        "options": {
+            "expires": int(60 * 60 * 8 * 1.2),  # If a task is not executed within 9.6 hours, it should be dropped from the queue. Two more tasks should be scheduled in the meantime.
+        },
+    },
+    "update-findings-from-source-issues": {
+        "task": "dojo.tools.tool_issue_updater.update_findings_from_source_issues",
+        "schedule": timedelta(hours=3),
+        "options": {
+            "expires": int(60 * 60 * 3 * 1.2),  # If a task is not executed within 9 hours, it should be dropped from the queue. Two more tasks should be scheduled in the meantime.
+        },
+    },
+    "compute-sla-age-and-notify": {
+        "task": "dojo.notifications.tasks.async_sla_compute_and_notify_task",
+        "schedule": crontab(hour=7, minute=30),
+        "options": {
+            "expires": int(60 * 60 * 24 * 1.2),  # If a task is not executed within 28.8 hours, it should be dropped from the queue. Two more tasks should be scheduled in the meantime.
+        },
+    },
+    "risk_acceptance_expiration_handler": {
+        "task": "dojo.risk_acceptance.helper.expiration_handler",
+        "schedule": crontab(minute=0, hour="*/3"),  # every 72 minutes
+        "options": {
+            "expires": int(60 * 60 * 3 * 1.2),  # If a task is not executed within 9 hours, it should be dropped from the queue. Two more tasks should be scheduled in the meantime.
+        },
+    },
+    "notification_webhook_status_cleanup": {
+        "task": "dojo.notifications.tasks.webhook_status_cleanup",
+        "schedule": timedelta(minutes=1),
+        "options": {
+            "expires": int(60 * 1 * 1.2),  # If a task is not executed within 72 seconds, it should be dropped from the queue. Two more tasks should be scheduled in the meantime.
+        },
+    },
+    "clear_sessions": {
+        "task": "dojo.tasks.clear_sessions",
+        "schedule": crontab(hour=0, minute=0, day_of_week=0),
+        "options": {
+            "expires": int(60 * 60 * 24 * 7 * 1.2),  # If a task is not executed within 8.4 days, it should be dropped from the queue. Two more tasks should be scheduled in the meantime.
+        },
+    },
+    # 'jira_status_reconciliation': {
+    #     'task': 'dojo.tasks.jira_status_reconciliation_task',
+    #     'schedule': timedelta(hours=12),
+    #     'kwargs': {'mode': 'reconcile', 'dryrun': True, 'daysback': 10, 'product': None, 'engagement': None}
+    # },
+    # 'fix_loop_duplicates': {
+    #     'task': 'dojo.tasks.fix_loop_duplicates_task',
+    #     'schedule': timedelta(hours=12)
+    # },
+
+}
+
+# ------------------------------------
+# Monitoring Metrics
+# ------------------------------------
+# address issue when running ./manage.py collectstatic
+# reference: https://github.com/korfuri/django-prometheus/issues/34
+PROMETHEUS_EXPORT_MIGRATIONS = False
+# django metrics for monitoring
+if env("DD_DJANGO_METRICS_ENABLED"):
+    DJANGO_METRICS_ENABLED = env("DD_DJANGO_METRICS_ENABLED")
+    INSTALLED_APPS = (*INSTALLED_APPS, "django_prometheus")
+    MIDDLEWARE = [
+        "django_prometheus.middleware.PrometheusBeforeMiddleware",
+        *MIDDLEWARE,
+        "django_prometheus.middleware.PrometheusAfterMiddleware",
+]
+    database_engine = DATABASES.get("default").get("ENGINE")
+    DATABASES["default"]["ENGINE"] = database_engine.replace("django.", "django_prometheus.", 1)
+    # CELERY_RESULT_BACKEND.replace('django.core','django_prometheus.', 1)
+    LOGIN_EXEMPT_URLS += (rf"^{URL_PREFIX}django_metrics/",)
+
+
+# ------------------------------------
+# Hashcode configuration
+# ------------------------------------
+# List of fields used to compute the hash_code
+# The fields must be one of HASHCODE_ALLOWED_FIELDS
+# If not present, default is the legacy behavior: see models.py, compute_hash_code_legacy function
+# legacy is:
+#   static scanner:  ['title', 'cwe', 'line', 'file_path', 'description']
+#   dynamic scanner: ['title', 'cwe', 'line', 'file_path', 'description']
+HASHCODE_FIELDS_PER_SCANNER = {
+    # In checkmarx, same CWE may appear with different severities: example "sql injection" (high) and "blind sql injection" (low).
+    # Including the severity in the hash_code keeps those findings not duplicate
+    "Anchore Engine Scan": ["title", "severity", "component_name", "component_version", "file_path"],
+    "AnchoreCTL Vuln Report": ["title", "severity", "component_name", "component_version", "file_path"],
+    "AnchoreCTL Policies Report": ["title", "severity", "component_name", "file_path"],
+    "Anchore Enterprise Policy Check": ["title", "severity", "component_name", "file_path"],
+    "Anchore Grype": ["title", "severity", "component_name", "component_version"],
+    "Aqua Scan": ["severity", "vulnerability_ids", "component_name", "component_version"],
+    "Bandit Scan": ["file_path", "line", "vuln_id_from_tool"],
+    "Burp Enterprise Scan": ["title", "severity", "cwe"],
+    # "Burp Suite DAST Scan" is the renamed "Burp Enterprise Scan" (same parser, see
+    # dojo/tools/burp_suite_dast). The key here was "Burp Suite DAST" -- a name no parser
+    # ever produces -- so the list below never applied to the renamed scan type and it fell
+    # back to the legacy hash, giving the two names different identities for the same tool.
+    "Burp Suite DAST Scan": ["title", "severity", "cwe"],
+    "Burp Scan": ["title", "severity", "vuln_id_from_tool"],
+    "CargoAudit Scan": ["vulnerability_ids", "severity", "component_name", "component_version", "vuln_id_from_tool"],
+    "Checkmarx Scan": ["cwe", "severity", "file_path"],
+    # Same three fields as "Checkmarx CxFlow SAST" below, and for the same reason: the
+    # detailed mode of this parser sets vuln_id_from_tool (queryId), file_path (sinkFilename)
+    # and line (sinkLineNumber) on every finding, so all three are populated and none of them
+    # carries scan text. Without an entry here the scan type fell through to the legacy field
+    # set, which includes `description` -- so a parser change that reworded a finding moved its
+    # hash_code, which is the fragility this list exists to avoid. The algorithm for this scan
+    # type is unique_id_from_tool, so the change moves the stored hash without changing how
+    # candidates are looked up.
+    "Checkmarx Scan detailed": ["vuln_id_from_tool", "file_path", "line"],
+    "Checkmarx OSA": ["vulnerability_ids", "component_name"],
+    "Cloudsploit Scan": ["title", "description"],
+    "Coverity Scan JSON Report": ["title", "cwe", "line", "file_path", "description"],
+    "SonarQube Scan": ["cwe", "severity", "file_path"],
+    "SonarQube API Import": ["title", "file_path", "line"],
+    "Sonatype Application Scan": ["title", "cwe", "file_path", "component_name", "component_version", "vulnerability_ids"],
+    "Dependency Check Scan": ["title", "cwe", "file_path"],
+    "Dockle Scan": ["title", "description", "vuln_id_from_tool"],
+    "Dependency Track Finding Packaging Format (FPF) Export": ["component_name", "component_version", "vulnerability_ids"],
+    "Horusec Scan": ["title", "description", "file_path", "line"],
+    "Mobsfscan Scan": ["title", "severity", "cwe", "file_path", "description"],
+    "Tenable Scan": ["title", "severity", "vulnerability_ids", "cwe"],
+    "Nexpose Scan": ["title", "severity", "vulnerability_ids", "cwe"],
+    # possible improvement: in the scanner put the library name into file_path, then dedup on cwe + file_path + severity
+    "NPM Audit Scan": ["title", "severity", "file_path", "vulnerability_ids", "cwe"],
+    "NPM Audit v7+ Scan": ["title", "severity", "cwe", "vuln_id_from_tool"],
+    # possible improvement: in the scanner put the library name into file_path, then dedup on cwe + file_path + severity
+    "Yarn Audit Scan": ["title", "severity", "file_path", "vulnerability_ids", "cwe"],
+    # possible improvement: in the scanner put the library name into file_path, then dedup on vulnerability_ids + file_path + severity
+    "Mend Scan": ["title", "severity", "description"],
+    "ZAP Scan": ["title", "cwe", "severity"],
+    "Qualys Scan": ["title", "severity", "endpoints"],
+    # 'Qualys Webapp Scan': ['title', 'unique_id_from_tool'],
+    "PHP Symfony Security Check": ["title", "vulnerability_ids"],
+    "Clair Scan": ["title", "vulnerability_ids", "description", "severity"],
+    # for backwards compatibility because someone decided to rename this scanner:
+    "Symfony Security Check": ["title", "vulnerability_ids"],
+    "DSOP Scan": ["vulnerability_ids"],
+    "Acunetix Scan": ["title", "description"],
+    "Terrascan Scan": ["vuln_id_from_tool", "title", "severity", "file_path", "line", "component_name"],
+    "Trivy Operator Scan": ["title", "severity", "vulnerability_ids", "description"],
+    "Trivy Scan": ["title", "severity", "vulnerability_ids", "cwe", "description"],
+    "TFSec Scan": ["severity", "vuln_id_from_tool", "file_path", "line"],
+    "Snyk Scan": ["vuln_id_from_tool", "file_path", "component_name", "component_version"],
+    "GitLab Dependency Scanning Report": ["title", "vulnerability_ids", "file_path", "component_name", "component_version"],
+    # garak findings have no file_path/line; description holds the (per-run, randomly sampled) prompt/output and is
+    # therefore unstable across runs. severity is also excluded: it's an aggregate (the most severe rung seen across a
+    # probe's occurrences) and shifts as the occurrence set changes, so dedupe on the stable identity: probe-derived
+    # title + target model.
+    "Garak Scan": ["title", "component_name"],
+    # promptfoo findings have no file_path/line; description holds the (per-run) attack input
+    # and model output and is unstable across runs, and severity is an aggregate that shifts
+    # with the set of failed attempts. Dedupe on the stable identity: plugin-derived title +
+    # target model.
+    "Promptfoo Scan": ["title", "component_name"],
+    "SpotBugs Scan": ["cwe", "severity", "file_path", "line"],
+    "JFrog Xray Unified Scan": ["vulnerability_ids", "file_path", "component_name", "component_version"],
+    "JFrog Xray On Demand Binary Scan": ["title", "component_name", "component_version"],
+    "JFrog Xray API Summary Artifact Scan": ["title", "description", "component_name", "component_version"],
+    "Scout Suite Scan": ["file_path", "vuln_id_from_tool"],  # for now we use file_path as there is no attribute for "service"
+    # severity is deliberately excluded: the Seal CSV has no severity column today, so
+    # every finding gets the same default, and including it would fork all existing
+    # findings into duplicates once the CLI starts exporting a score
+    "Seal Security Scan": ["vulnerability_ids", "component_name", "component_version"],
+    "Meterian Scan": ["cwe", "component_name", "component_version", "description", "severity"],
+    "Github SAST Scan": ["vuln_id_from_tool", "severity", "file_path", "line"],
+    "Github Vulnerability Scan": ["title", "severity", "component_name", "vulnerability_ids", "file_path"],
+    "Github Secrets Detection Report": ["title", "file_path", "line"],
+    "Solar Appscreener Scan": ["title", "file_path", "line", "severity"],
+    "pip-audit Scan": ["vuln_id_from_tool", "component_name", "component_version"],
+    "Rubocop Scan": ["vuln_id_from_tool", "file_path", "line"],
+    "JFrog Xray Scan": ["title", "description", "component_name", "component_version"],
+    "CycloneDX Scan": ["vuln_id_from_tool", "component_name", "component_version"],
+    # Matches CycloneDX: the same SBOM imported in either format must dedupe the same way.
+    "SPDX Scan": ["vuln_id_from_tool", "component_name", "component_version"],
+    # OpenVEX statements are per (product, vulnerability), which is what these three fields capture.
+    # Matching CycloneDX/SPDX means a VEX statement deduplicates onto the SBOM finding for the same
+    # component and CVE, which is exactly how a suppression is meant to land.
+    "OpenVEX Scan": ["vuln_id_from_tool", "component_name", "component_version"],
+    # CSAF advisories are per (vulnerability, product), so the same three fields identify a finding.
+    "CSAF Scan": ["vuln_id_from_tool", "component_name", "component_version"],
+    "SSLyze Scan (JSON)": ["title", "description"],
+    "Harbor Vulnerability Scan": ["title", "mitigation"],
+    "Rusty Hog Scan": ["file_path", "payload"],
+    "StackHawk HawkScan": ["vuln_id_from_tool", "component_name", "component_version"],
+    "Hydra Scan": ["title", "description"],
+    "DrHeader JSON Importer": ["title", "description"],
+    "Whispers": ["vuln_id_from_tool", "file_path", "line"],
+    "Blackduck Hub Scan": ["title", "vulnerability_ids", "component_name", "component_version"],
+    "Veracode SourceClear Scan": ["title", "vulnerability_ids", "component_name", "component_version", "severity"],
+    "Vulners Scan": ["vuln_id_from_tool", "component_name"],
+    "Twistlock Image Scan": ["title", "severity", "component_name", "component_version"],
+    "NeuVector (REST)": ["title", "severity", "component_name", "component_version"],
+    "NeuVector (compliance)": ["title", "vuln_id_from_tool", "description"],
+    "Wpscan": ["title", "description", "severity"],
+    "Popeye Scan": ["title", "description"],
+    "Nuclei Scan": ["title", "cwe", "severity", "component_name"],
+    "KubeHunter Scan": ["title", "description"],
+    "kube-bench Scan": ["title", "vuln_id_from_tool", "description"],
+    "Threagile risks report": ["title", "cwe", "severity"],
+    "Trufflehog Scan": ["title", "description", "line"],
+    # Secretlint names a rule at a source position, the same shape as Bandit. The masked value is
+    # deliberately left out, so rotating a secret to one of a different length does not create a
+    # second finding for the same hard-coded credential.
+    "Secretlint Scan": ["file_path", "line", "vuln_id_from_tool"],
+    "Humble Json Importer": ["title"],
+    "MSDefender Parser": ["title", "description"],
+    "HCLAppScan XML": ["title", "description"],
+    "HCL AppScan on Cloud SAST XML": ["title", "file_path", "line", "severity"],
+    "KICS Scan": ["file_path", "line", "severity", "description", "title"],
+    "MobSF Scan": ["title", "description", "severity", "file_path"],
+    "MobSF Scorecard Scan": ["title", "description", "severity"],
+    "OSV Scan": ["title", "description", "severity"],
+    "Snyk Code Scan": ["vuln_id_from_tool", "file_path"],
+    "Deepfence Threatmapper Report": ["title", "description", "severity"],
+    "Bearer CLI": ["title", "severity"],
+    "Nancy Scan": ["title", "vuln_id_from_tool"],
+    "Wiz Scan": ["title", "description", "severity"],
+    "Kubescape JSON Importer": ["title", "component_name"],
+    "Kiuwan SCA Scan": ["description", "severity", "component_name", "component_version", "cwe"],
+    "Rapplex Scan": ["title", "endpoints", "severity"],
+    "AppCheck Web Application Scanner": ["title", "severity"],
+    "AWS Inspector2 Scan": ["title", "severity", "description"],
+    "Legitify Scan": ["title", "endpoints", "severity"],
+    "ThreatComposer Scan": ["title", "description"],
+    "Invicti Scan": ["title", "description", "severity"],
+    "Checkmarx CxFlow SAST": ["vuln_id_from_tool", "file_path", "line"],
+    "HackerOne Cases": ["title", "severity"],
+    "KrakenD Audit Scan": ["description", "mitigation", "severity"],
+    "Red Hat Satellite": ["description", "severity"],
+    "Qualys Hacker Guardian Scan": ["title", "severity", "description"],
+    "Cyberwatch scan (Galeax)": ["title", "description", "severity"],
+    "Cycognito Scan": ["title", "severity"],
+    "OpenVAS Parser v2": ["title", "severity", "vuln_id_from_tool", "endpoints"],
+    "Snyk Issue API Scan": ["vuln_id_from_tool", "file_path"],
+    "OpenReports": ["vulnerability_ids", "component_name", "component_version", "severity"],
+    "n0s1 Scanner": ["description"],
+    "IriusRisk Threats Scan": ["title", "component_name"],
+    "Orca Security Alerts": ["title", "component_name"],
+    "Qualys VMDR": ["title", "component_name", "vuln_id_from_tool"],
+    "Alert Logic Scan": ["title", "component_name", "vuln_id_from_tool"],
+    "PICUS Scan": ["vuln_id_from_tool"],
+    # Package-manager advisory scanners: a finding is identified by the package it affects and
+    # the advisory id, both stable. Composer is the exception - its report names the affected
+    # version RANGE and never the installed version, so there is no version to hash.
+    "Composer Audit Scan": ["component_name", "vuln_id_from_tool"],
+    "pnpm Audit Scan": ["component_name", "component_version", "vuln_id_from_tool"],
+    "Dotnet Vulnerable Packages Scan": ["component_name", "component_version", "vuln_id_from_tool"],
+    "Mix Audit Scan": ["component_name", "component_version", "vuln_id_from_tool"],
+    # Copied verbatim from the Socket and Lacework blocks in dojo-pro pro_settings.py. These
+    # must agree or a file import and an API sync compute different hash codes for the same
+    # finding and stop deduplicating against each other.
+    "Socket - Connectors Import": ["title", "severity", "component_name"],
+    "Lacework - Connectors Import": ["title", "severity", "component_name"],
+    # Likewise copied verbatim from the CrowdStrike Spotlight block. Note it lists
+    # unique_id_from_tool among the hash fields as well as pairing with the
+    # unique_id_from_tool_or_hash_code algorithm; that is what the connector configures.
+    "CrowdStrike:Spotlight - Connectors Import": [
+        "unique_id_from_tool",
+        "title",
+        "severity",
+        "vulnerability_ids",
+    ],
+    "FOSSA - Connectors Import": ["title", "severity", "component_name"],
+    "Endor Labs - Connectors Import": ["title", "severity", "vuln_id_from_tool"],
+    # GitGuardian incident ids are stable, so the connector hashes on the unique id alone. Note this
+    # one pairs with the plain hash_code algorithm, not unique_id_from_tool_or_hash_code.
+    "GitGuardian - Connectors Import": ["unique_id_from_tool"],
+    "Codacy - Connectors Import": ["title", "severity", "vuln_id_from_tool"],
+    "DeepSource - Connectors Import": ["title", "severity", "file_path"],
+    # Probely does not follow the "<Vendor> - Connectors Import" naming. Note this block pairs
+    # the plain hash_code algorithm with a wide field set that includes endpoints, so the
+    # endpoint must be populated for the hash to mean anything.
+    "Probely API Import": [
+        "title",
+        "description",
+        "severity",
+        "vuln_id_from_tool",
+        "unique_id_from_tool",
+        "endpoints",
+        "cwe",
+        "mitigation",
+    ],
+    # Detectify also breaks the "<Vendor> - Connectors Import" naming. Findings carry a stable
+    # uuid, so the connector prefers it and falls back to these hash fields.
+    "Detectify Scan": ["title", "severity", "component_name"],
+    # HackerOne and YesWeHack report ids are globally unique on their platforms, so both
+    # connector blocks hash the unique id alone.
+    "HackerOne - Connectors Import": ["unique_id_from_tool"],
+    "YesWeHack - Connectors Import": ["unique_id_from_tool"],
+    "Intigriti - Connectors Import": ["unique_id_from_tool"],
+    "Google Cloud SCC - Connectors Import": ["unique_id_from_tool"],
+    "Fairwinds Insights - Connectors Import": ["title", "severity", "component_name"],
+    "AccuKnox - Connectors Import": ["title", "severity", "description"],
+    "Halo Security - Connectors Import": ["title", "severity", "endpoints"],
+    "Beagle Security - Connectors Import": ["title", "severity", "endpoints"],
+    "Nightfall AI - Connectors Import": ["title", "severity", "description"],
+    "Fleet:Vulnerabilities - Connectors Import": ["title", "severity", "component_name"],
+    "Fleet:Policies - Connectors Import": ["title", "severity", "vuln_id_from_tool"],
+    "Elastic Security:CNVM - Connectors Import": ["title", "severity", "component_name"],
+    "Elastic Security:Posture - Connectors Import": ["title", "severity", "vuln_id_from_tool"],
+    "Elastic Security:Detections - Connectors Import": ["title", "severity", "vuln_id_from_tool"],
+    "Action1 Scan": ["title", "severity", "component_name", "component_version"],
+    "Datadog Cloud Security": ["title", "severity", "component_name"],
+    "Escape - Connectors Import": ["title", "severity", "endpoints"],
+    "Rapid7 InsightAppSec - Connectors Import": ["unique_id_from_tool"],
+    "Intruder API Import": ["unique_id_from_tool", "title", "severity"],
+    "NowSecure": ["title", "severity", "component_name"],
+    "Vanta Compliance": ["title", "severity", "component_name"],
+    "Wallarm API Security": ["title", "severity", "component_name"],
+    "Bright - Connectors Import": ["title", "severity", "endpoints"],
+    "Microsoft Defender for Cloud - Connectors Import": ["unique_id_from_tool"],
+    "Akto Scan": ["title", "severity", "endpoints", "vuln_id_from_tool"],
+    "Holm Security Scan": ["title", "severity", "endpoints", "vuln_id_from_tool"],
+    "Klocwork Scan": ["title", "severity", "file_path", "vuln_id_from_tool"],
+    "Qwiet Scan": ["title", "severity", "file_path", "cwe", "component_name"],
+    "Automox Scan": ["title", "severity", "component_name"],
+    "BigID Scan": ["title", "severity", "component_name"],
+    "Calico Cloud Image Assurance Scan": [
+        "title",
+        "severity",
+        "component_name",
+        "component_version",
+    ],
+    "Dragos Scan": ["title", "severity", "component_name"],
+    "HiddenLayer Model Scan": ["title", "severity", "file_path"],
+    "NetRise Scan": ["title", "severity", "component_name"],
+    "Nozomi Vantage Scan": ["title", "severity", "component_name"],
+    "Ostorlab Scan": ["title", "severity", "component_name"],
+    "Parasoft DTP Scan": ["title", "severity", "file_path", "vuln_id_from_tool"],
+    "Uptycs Scan": ["title", "severity", "component_name"],
+    "CyberArk Certificate Manager Scan": ["title", "severity", "component_name"],
+    "ManageEngine Vulnerability Manager Plus Scan": [
+        "title",
+        "severity",
+        "component_name",
+    ],
+    "Zimperium zScan": ["title", "severity", "file_path", "vuln_id_from_tool"],
+    "Group-IB ASM - Connectors Import": ["title", "severity"],
+    "Quay - Connectors Import": [
+        "title",
+        "severity",
+        "component_name",
+        "component_version",
+    ],
+    # The network scanners below describe what they found in the description: a response size, a
+    # detected version, a scan timestamp, or - for sqlmap - a payload built from random numbers.
+    # All of those change between two scans of an unchanged target, so the legacy algorithm (which
+    # hashes the description) would import the same open port or the same injectable parameter again
+    # on every rescan. What each finding IS lives in the title and the endpoint, so those are hashed.
+    "ffuf Scan": ["title", "endpoints"],
+    "Dirsearch Scan": ["title", "endpoints"],
+    "Gobuster Scan": ["title", "endpoints"],
+    "WhatWeb Scan": ["title", "endpoints"],
+    "Naabu Scan": ["title", "endpoints"],
+    "Masscan Scan": ["title", "endpoints"],
+    "Sqlmap Scan": ["title", "endpoints"],
+    "Nettacker Scan": ["title", "endpoints"],
+    "httpx Scan": ["title", "endpoints"],
+    "kube-score Scan": ["title", "component_name", "vuln_id_from_tool"],
+    "ModelScan Scan": ["title", "file_path", "vuln_id_from_tool"],
+    "TFLint Scan": ["vuln_id_from_tool", "file_path", "line"],
+    "Kingfisher Scan": ["title", "file_path", "line"],
+    "2ms Scan": ["title", "file_path", "line", "description"],
+    "Quark-Engine Scan": ["title", "component_name", "vuln_id_from_tool"],
+    "ScubaGoggles Scan": ["vuln_id_from_tool", "component_name"],
+    "ScubaGear Scan": ["vuln_id_from_tool", "severity"],
+    "kubesec Scan": ["vuln_id_from_tool", "component_name", "file_path"],
+    "Cloudsplaining Scan": ["vuln_id_from_tool", "component_name"],
+    "bomber Scan": ["vuln_id_from_tool", "component_name", "component_version"],
+    "sbomqs Scan": ["vuln_id_from_tool", "component_name"],
+    "Pluto Scan": ["vuln_id_from_tool", "component_name", "file_path"],
+    "GuardDog Scan": ["vuln_id_from_tool", "component_name", "file_path", "line"],
+    "kubent Scan": ["vuln_id_from_tool", "component_name"],
+    "OpenSSF Scorecard": ["vuln_id_from_tool", "component_name"],
+    "uv audit Scan": ["vuln_id_from_tool", "component_name", "component_version"],
+    "Ansible Lint Scan": ["vuln_id_from_tool", "file_path", "line"],
+    "ShellCheck Scan": ["vuln_id_from_tool", "file_path", "line"],
+    "Fickling Scan": ["vuln_id_from_tool", "severity"],
+    "Regula Scan": ["vuln_id_from_tool", "component_name", "file_path"],
+    "Threat Dragon Scan": ["title", "component_name", "severity"],
+    "Safety Scan": ["vuln_id_from_tool", "component_name", "component_version"],
+    "Slither Scan": ["vuln_id_from_tool", "file_path", "line"],
+    "Binwalk Scan": ["title", "file_path"],
+    "pip-licenses Scan": ["component_name", "component_version", "vuln_id_from_tool"],
+    "Syft SBOM": ["component_name", "component_version", "vuln_id_from_tool"],
+    "ScubaGear Report Scan": ["vuln_id_from_tool", "severity"],
+    "capa Scan": ["vuln_id_from_tool", "component_name"],
+    "ScubaGoggles Action Plan": ["vuln_id_from_tool", "severity"],
+    "dockerfile_lint Scan": ["title", "line"],
+    "Dodgy Scan": ["vuln_id_from_tool", "file_path", "line"],
+    "Licensecheck Scan": ["component_name", "component_version", "vuln_id_from_tool"],
+    "Noir Scan": ["vuln_id_from_tool", "file_path"],
+    "Grant Scan": ["component_name", "component_version", "vuln_id_from_tool"],
+    "CFRipper Scan": ["vuln_id_from_tool", "component_name"],
+    "Tartufo Scan": ["unique_id_from_tool"],
+    "Prospector Scan": ["vuln_id_from_tool", "file_path", "line"],
+    "Gixy Scan": ["vuln_id_from_tool", "file_path", "line"],
+    "Python Taint Scan": ["vuln_id_from_tool", "file_path", "line"],
+    "Ruff Scan": ["vuln_id_from_tool", "file_path", "line"],
+    "CodeQL Scan": ["vuln_id_from_tool", "file_path", "line"],
+    "Psalm Scan": ["vuln_id_from_tool", "file_path", "line"],
+    "PHPStan Scan": ["vuln_id_from_tool", "file_path", "line"],
+    "Staticcheck Scan": ["vuln_id_from_tool", "file_path", "line"],
+    # Runtime tools report an event stream. Keying on the rule and the workload rather than the
+    # event's own detail is what folds a rule firing repeatedly into one Finding.
+    "Falco Scan": ["vuln_id_from_tool", "component_name"],
+    "Tracee Scan": ["vuln_id_from_tool", "component_name"],
+    "Kyverno Scan": ["vuln_id_from_tool", "component_name"],
+    "KubeEye Scan": ["vuln_id_from_tool", "component_name"],
+    "Vuls Scan": ["vulnerability_ids", "component_name"],
+    "terraform-compliance Scan": ["vuln_id_from_tool", "component_name"],
+    "CloudFormation Guard Scan": ["vuln_id_from_tool", "file_path", "component_name"],
+    # component_name holds the injectable parameter, so two parameters on one URL stay apart
+    # while the many payloads Dalfox tries against one parameter fold together.
+    "Dalfox Scan": ["vuln_id_from_tool", "component_name", "endpoints"],
+    "PyRIT Scan": ["title", "vuln_id_from_tool"],
+    "debsecan Scan": ["vulnerability_ids", "component_name"],
+    "PMapper Scan": ["vuln_id_from_tool", "component_name"],
+    # Deliberately without "severity", unlike most entries here. The Xeol parser derives
+    # severity from datetime.now() against the component's EOL date, so a stored finding
+    # would change identity on its own as the date passes each band boundary. The product
+    # name in the title plus the component name and version identify the finding; the
+    # description is excluded because it embeds every artifact attribute and moves whenever
+    # the parser's wording does.
+    "Xeol Parser": ["title", "component_name", "component_version"],
+    # Checkmarx One already deduplicates on the vendor id; this makes the STORED hash_code
+    # agree with that instead of falling through to the legacy field set, whose "description"
+    # is what every result family assigns to "title" as well.
+    "Checkmarx One Scan": ["unique_id_from_tool"],
+    "OPF Scan": ["title", "cwe", "severity", "description"],
+}
+
+# Override the hardcoded settings here via the env var
+if len(env("DD_HASHCODE_FIELDS_PER_SCANNER")) > 0:
+    env_hashcode_fields_per_scanner = json.loads(env("DD_HASHCODE_FIELDS_PER_SCANNER"))
+    for key, value in env_hashcode_fields_per_scanner.items():
+        if not isinstance(value, list):
+            msg = f"Fields definition '{value}' for hashcode calculation of '{key}' is not valid. It needs to be list of strings but it is {type(value)}."
+            raise TypeError(msg)
+        if not all(isinstance(field, str) for field in value):
+            msg = f"Fields for hashcode calculation for {key} are not valid. It needs to be list of strings. Some of fields are not string."
+            raise AttributeError(msg)
+        if key in HASHCODE_FIELDS_PER_SCANNER:
+            logger.info(f"Replacing {key} with value {value} (previously set to {HASHCODE_FIELDS_PER_SCANNER[key]}) from env var DD_HASHCODE_FIELDS_PER_SCANNER")
+            HASHCODE_FIELDS_PER_SCANNER[key] = value
+        if key not in HASHCODE_FIELDS_PER_SCANNER:
+            logger.info("Adding %s with value %s from env var DD_HASHCODE_FIELDS_PER_SCANNER", key, value)
+            HASHCODE_FIELDS_PER_SCANNER[key] = value
+
+
+# This tells if we should accept cwe=0 when computing hash_code with a configurable list of fields from HASHCODE_FIELDS_PER_SCANNER (this setting doesn't apply to legacy algorithm)
+# If False and cwe = 0, then the hash_code computation will fallback to legacy algorithm for the concerned finding
+# Default is True (if scanner is not configured here but is configured in HASHCODE_FIELDS_PER_SCANNER, it allows null cwe)
+HASHCODE_ALLOWS_NULL_CWE = {
+    "Anchore Engine Scan": True,
+    "AnchoreCTL Vuln Report": True,
+    "AnchoreCTL Policies Report": True,
+    "Anchore Enterprise Policy Check": True,
+    "Anchore Grype": True,
+    "Anchore Grype detailed": True,
+    "AWS Prowler Scan": True,
+    "AWS Prowler V3": True,
+    "Checkmarx Scan": False,
+    "Checkmarx OSA": True,
+    "Cloudsploit Scan": True,
+    "SonarQube Scan": False,
+    "Dependency Check Scan": True,
+    "Mobsfscan Scan": False,
+    "Tenable Scan": True,
+    "Nexpose Scan": True,
+    "NPM Audit Scan": True,
+    "NPM Audit v7+ Scan": True,
+    "Yarn Audit Scan": True,
+    "Mend Scan": True,
+    "ZAP Scan": False,
+    "Qualys Scan": True,
+    "DSOP Scan": True,
+    "Acunetix Scan": True,
+    "Trivy Operator Scan": True,
+    "Trivy Scan": True,
+    "SpotBugs Scan": False,
+    "Scout Suite Scan": True,
+    "AWS Security Hub Scan": True,
+    "Meterian Scan": True,
+    "SARIF": True,
+    # These three parsers read SARIF, where a rule is not obliged to carry a CWE, so they are listed
+    # for the same reason "SARIF" is above. Note that this setting only takes effect for a scan type
+    # that ALSO has an entry in HASHCODE_FIELDS_PER_SCANNER - without one the legacy algorithm runs
+    # and never consults it - so this matters to an operator who configures fields for them through
+    # DD_HASHCODE_FIELDS_PER_SCANNER rather than to the shipped defaults.
+    "Flawfinder Scan": True,
+    "Cppcheck Scan": True,
+    "DevSkim Scan": True,
+    "Hadolint Dockerfile check": True,
+    "Semgrep JSON Report": True,
+    "Generic Findings Import": True,
+    "Edgescan Scan": True,
+    "Bugcrowd API Import": True,
+    "Veracode SourceClear Scan": True,
+    "Vulners Scan": True,
+    "Twistlock Image Scan": True,
+    "Wpscan": True,
+    "Rusty Hog Scan": True,
+    "Codechecker Report native": True,
+    "Wazuh": True,
+    "Nuclei Scan": True,
+    "Threagile risks report": True,
+    "HCL AppScan on Cloud SAST XML": True,
+    "AWS Inspector2 Scan": True,
+    "Cyberwatch scan (Galeax)": True,
+    "OpenVAS Parser v2": True,
+    "OpenReports": True,
+    "OPF Scan": True,
+}
+
+# List of fields that are known to be usable in hash_code computation)
+# 'endpoints' is a pseudo field that uses the endpoints (for dynamic scanners). If `V3_FEATURE_LOCATIONS` is True, Dojo uses locations (URLs) instead.
+# 'unique_id_from_tool' is often not needed here as it can be used directly in the dedupe algorithm, but it's also possible to use it for hashing
+HASHCODE_ALLOWED_FIELDS = ["title", "cwe", "cwes", "vulnerability_ids", "line", "file_path", "payload", "component_name", "component_version", "description", "endpoints", "unique_id_from_tool", "severity", "vuln_id_from_tool", "mitigation"]
+
+# Adding fields to the hash_code calculation regardless of the previous settings
+HASH_CODE_FIELDS_ALWAYS = ["service"]
+
+# ------------------------------------
+# Deduplication configuration
+# ------------------------------------
+# List of algorithms
+# legacy one with multiple conditions (default mode)
+DEDUPE_ALGO_LEGACY = "legacy"
+# based on dojo_finding.unique_id_from_tool only (for checkmarx detailed, or sonarQube detailed for example)
+# When using the `unique_id_from_tool` or `vuln_id_from_tool` fields for dedupication, it's important that these are uqniue for the finding and constant over time across subsequent scans.
+# If this is not the case, the values can still be useful to set on the finding model without using them for deduplication.
+DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL = "unique_id_from_tool"
+# based on dojo_finding.hash_code only
+DEDUPE_ALGO_HASH_CODE = "hash_code"
+# unique_id_from_tool or hash_code
+# Makes it possible to deduplicate on a technical id (same parser) and also on some functional fields (cross-parsers deduplication)
+DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE = "unique_id_from_tool_or_hash_code"
+
+DEDUPE_ALGOS = [
+    DEDUPE_ALGO_LEGACY,
+    DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    DEDUPE_ALGO_HASH_CODE,
+    DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+]
+
+# Allows to deduplicate with endpoints if endpoints is not included in the hashcode.
+# Possible values are: scheme, host, port, path, query, fragment, userinfo, and user. For a details description see https://hyperlink.readthedocs.io/en/latest/api.html#attributes.
+# Example:
+# Finding A and B have the same hashcode. Finding A has endpoint http://defectdojo.com and finding B has endpoint https://defectdojo.com/finding.
+# - An empyt list ([]) means, no fields are used. B is marked as duplicated of A.
+# - Host (['host']) means: B is marked as duplicate of A because the host (defectdojo.com) is the same.
+# - Host and path (['host', 'path']) means: A and B stay untouched because the path is different.
+#
+# If a finding has more than one endpoint, only one endpoint pair must match to mark the finding as duplicate.
+DEDUPE_ALGO_ENDPOINT_FIELDS = ["host", "path"]
+
+# Choice of deduplication algorithm per parser
+# Key = the scan_type from factory.py (= the test_type)
+# Default is DEDUPE_ALGO_LEGACY
+DEDUPLICATION_ALGORITHM_PER_PARSER = {
+    "Composer Audit Scan": DEDUPE_ALGO_HASH_CODE,
+    "pnpm Audit Scan": DEDUPE_ALGO_HASH_CODE,
+    "Dotnet Vulnerable Packages Scan": DEDUPE_ALGO_HASH_CODE,
+    "Mix Audit Scan": DEDUPE_ALGO_HASH_CODE,
+    "Socket - Connectors Import": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Lacework - Connectors Import": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "CrowdStrike:Spotlight - Connectors Import": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "FOSSA - Connectors Import": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Endor Labs - Connectors Import": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "GitGuardian - Connectors Import": DEDUPE_ALGO_HASH_CODE,
+    "Codacy - Connectors Import": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "DeepSource - Connectors Import": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Probely API Import": DEDUPE_ALGO_HASH_CODE,
+    "Detectify Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "HackerOne - Connectors Import": DEDUPE_ALGO_HASH_CODE,
+    "YesWeHack - Connectors Import": DEDUPE_ALGO_HASH_CODE,
+    "Intigriti - Connectors Import": DEDUPE_ALGO_HASH_CODE,
+    "Google Cloud SCC - Connectors Import": DEDUPE_ALGO_HASH_CODE,
+    "Fairwinds Insights - Connectors Import": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "AccuKnox - Connectors Import": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Halo Security - Connectors Import": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Beagle Security - Connectors Import": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Nightfall AI - Connectors Import": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Fleet:Vulnerabilities - Connectors Import": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Fleet:Policies - Connectors Import": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Elastic Security:CNVM - Connectors Import": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Elastic Security:Posture - Connectors Import": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Elastic Security:Detections - Connectors Import": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Action1 Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Datadog Cloud Security": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Escape - Connectors Import": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Rapid7 InsightAppSec - Connectors Import": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Intruder API Import": DEDUPE_ALGO_HASH_CODE,
+    "NowSecure": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Vanta Compliance": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Wallarm API Security": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Bright - Connectors Import": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Microsoft Defender for Cloud - Connectors Import": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Akto Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Holm Security Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Klocwork Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Qwiet Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Automox Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "BigID Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Calico Cloud Image Assurance Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Dragos Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "HiddenLayer Model Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "NetRise Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Nozomi Vantage Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Ostorlab Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Parasoft DTP Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Uptycs Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "CyberArk Certificate Manager Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "ManageEngine Vulnerability Manager Plus Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Zimperium zScan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Group-IB ASM - Connectors Import": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Quay - Connectors Import": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Aqua Supply Chain - Connectors Import": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "Anchore Engine Scan": DEDUPE_ALGO_HASH_CODE,
+    "AnchoreCTL Vuln Report": DEDUPE_ALGO_HASH_CODE,
+    "AnchoreCTL Policies Report": DEDUPE_ALGO_HASH_CODE,
+    "Anchore Enterprise Policy Check": DEDUPE_ALGO_HASH_CODE,
+    "Anchore Grype": DEDUPE_ALGO_HASH_CODE,
+    "Anchore Grype detailed": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "Aqua Scan": DEDUPE_ALGO_HASH_CODE,
+    "AuditJS Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "AWS Prowler Scan": DEDUPE_ALGO_HASH_CODE,
+    "AWS Prowler V3": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "AWS Security Finding Format (ASFF) Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "Bandit Scan": DEDUPE_ALGO_HASH_CODE,
+    # NOTE: tests 55 and 66 in dojo_testdata.json use this scan type as the
+    # unique_id_from_tool vehicle for test_deduplication_logic and
+    # test_false_positive_history_logic. Those suites vary title/description/cwe and
+    # assert the hash_code MOVES while the unique id still matches, which only holds
+    # while this scan type has no HASHCODE_FIELDS_PER_SCANNER entry. Giving it one
+    # will fail those suites; repoint the fixture first.
+    "Burp REST API": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "Burp Enterprise Scan": DEDUPE_ALGO_HASH_CODE,
+    "Burp Suite DAST Scan": DEDUPE_ALGO_HASH_CODE,
+    "Burp Scan": DEDUPE_ALGO_HASH_CODE,
+    "CargoAudit Scan": DEDUPE_ALGO_HASH_CODE,
+    "Checkmarx Scan detailed": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "Checkmarx Scan": DEDUPE_ALGO_HASH_CODE,
+    "Checkmarx One Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "Checkmarx OSA": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Codechecker Report native": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "Coverity API": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "Coverity Scan JSON Report": DEDUPE_ALGO_HASH_CODE,
+    "Cobalt.io API": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "Crunch42 Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "Dependency Track Finding Packaging Format (FPF) Export": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Horusec Scan": DEDUPE_ALGO_HASH_CODE,
+    "Mobsfscan Scan": DEDUPE_ALGO_HASH_CODE,
+    "SonarQube Scan detailed": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "SonarQube Scan": DEDUPE_ALGO_HASH_CODE,
+    "SonarQube API Import": DEDUPE_ALGO_HASH_CODE,
+    "Sonatype Application Scan": DEDUPE_ALGO_HASH_CODE,
+    "Dependency Check Scan": DEDUPE_ALGO_HASH_CODE,
+    "Dockle Scan": DEDUPE_ALGO_HASH_CODE,
+    "Tenable Scan": DEDUPE_ALGO_HASH_CODE,
+    "Nexpose Scan": DEDUPE_ALGO_HASH_CODE,
+    "NPM Audit Scan": DEDUPE_ALGO_HASH_CODE,
+    "NPM Audit v7+ Scan": DEDUPE_ALGO_HASH_CODE,
+    "Yarn Audit Scan": DEDUPE_ALGO_HASH_CODE,
+    "Mend Scan": DEDUPE_ALGO_HASH_CODE,
+    "ZAP Scan": DEDUPE_ALGO_HASH_CODE,
+    "Qualys Scan": DEDUPE_ALGO_HASH_CODE,
+    "PHP Symfony Security Check": DEDUPE_ALGO_HASH_CODE,
+    "Acunetix Scan": DEDUPE_ALGO_HASH_CODE,
+    "Clair Scan": DEDUPE_ALGO_HASH_CODE,
+    # 'Qualys Webapp Scan': DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,  # Must also uncomment qualys webapp line in hashcode fields per scanner
+    "Veracode Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Veracode SourceClear Scan": DEDUPE_ALGO_HASH_CODE,
+    # for backwards compatibility because someone decided to rename this scanner:
+    "Symfony Security Check": DEDUPE_ALGO_HASH_CODE,
+    "DSOP Scan": DEDUPE_ALGO_HASH_CODE,
+    "Terrascan Scan": DEDUPE_ALGO_HASH_CODE,
+    "Trivy Operator Scan": DEDUPE_ALGO_HASH_CODE,
+    "Trivy Scan": DEDUPE_ALGO_HASH_CODE,
+    "TFSec Scan": DEDUPE_ALGO_HASH_CODE,
+    "HackerOne Cases": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Snyk Scan": DEDUPE_ALGO_HASH_CODE,
+    "GitLab Dependency Scanning Report": DEDUPE_ALGO_HASH_CODE,
+    "Garak Scan": DEDUPE_ALGO_HASH_CODE,
+    "Promptfoo Scan": DEDUPE_ALGO_HASH_CODE,
+    "GitLab SAST Report": DEDUPE_ALGO_HASH_CODE,
+    "Govulncheck Scanner": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "Govulncheck Scanner V2": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "GitLab Container Scan": DEDUPE_ALGO_HASH_CODE,
+    "GitLab Secret Detection Report": DEDUPE_ALGO_HASH_CODE,
+    "Checkov Scan": DEDUPE_ALGO_HASH_CODE,
+    "SpotBugs Scan": DEDUPE_ALGO_HASH_CODE,
+    "JFrog Xray Unified Scan": DEDUPE_ALGO_HASH_CODE,
+    "JFrog Xray On Demand Binary Scan": DEDUPE_ALGO_HASH_CODE,
+    # The parser emits a stable unique_id_from_tool (sha256 over the artifact digest, the impacted
+    # component name/version and the Xray issue id), so match on that first and keep hash_code only
+    # as the fallback. Matching purely on hash_code made a finding's identity depend on its
+    # description, which for this parser embeds JFrog's own CVE prose — vendor-maintained text that
+    # changes whenever Xray refreshes its vulnerability database. When it changed, reimport could no
+    # longer find the existing finding and closed + recreated it (observed in the field: thousands of
+    # findings mitigated and re-created in one reimport of otherwise unchanged data).
+    "JFrog Xray API Summary Artifact Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Scout Suite Scan": DEDUPE_ALGO_HASH_CODE,
+    "Seal Security Scan": DEDUPE_ALGO_HASH_CODE,
+    "AWS Security Hub Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "Meterian Scan": DEDUPE_ALGO_HASH_CODE,
+    "Github SAST Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Github Vulnerability Scan": DEDUPE_ALGO_HASH_CODE,
+    "Github Secrets Detection Report": DEDUPE_ALGO_HASH_CODE,
+    "Cloudsploit Scan": DEDUPE_ALGO_HASH_CODE,
+    "SARIF": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Flawfinder Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Cppcheck Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "DevSkim Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Azure Security Center Recommendations Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "Hadolint Dockerfile check": DEDUPE_ALGO_HASH_CODE,
+    "Semgrep JSON Report": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Generic Findings Import": DEDUPE_ALGO_HASH_CODE,
+    "Trufflehog Scan": DEDUPE_ALGO_HASH_CODE,
+    "Trufflehog3 Scan": DEDUPE_ALGO_HASH_CODE,
+    "Detect-secrets Scan": DEDUPE_ALGO_HASH_CODE,
+    "Secretlint Scan": DEDUPE_ALGO_HASH_CODE,
+    "njsscan Scan": DEDUPE_ALGO_HASH_CODE,
+    "cwe_checker Scan": DEDUPE_ALGO_HASH_CODE,
+    "Infer Scan": DEDUPE_ALGO_HASH_CODE,
+    "APKLeaks Scan": DEDUPE_ALGO_HASH_CODE,
+    "QARK Scan": DEDUPE_ALGO_HASH_CODE,
+    "cfn-lint Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "cfn-nag Scan": DEDUPE_ALGO_HASH_CODE,
+    "KubeLinter Scan": DEDUPE_ALGO_HASH_CODE,
+    "Polaris Scan": DEDUPE_ALGO_HASH_CODE,
+    "Conftest Scan": DEDUPE_ALGO_HASH_CODE,
+    "Lynis Scan": DEDUPE_ALGO_HASH_CODE,
+    "rkhunter Scan": DEDUPE_ALGO_HASH_CODE,
+    "chkrootkit Scan": DEDUPE_ALGO_HASH_CODE,
+    "AIDE Scan": DEDUPE_ALGO_HASH_CODE,
+    "ffuf Scan": DEDUPE_ALGO_HASH_CODE,
+    "WhatWeb Scan": DEDUPE_ALGO_HASH_CODE,
+    "Dirsearch Scan": DEDUPE_ALGO_HASH_CODE,
+    "Naabu Scan": DEDUPE_ALGO_HASH_CODE,
+    "Gobuster Scan": DEDUPE_ALGO_HASH_CODE,
+    "Masscan Scan": DEDUPE_ALGO_HASH_CODE,
+    "Sqlmap Scan": DEDUPE_ALGO_HASH_CODE,
+    "YARA Scan": DEDUPE_ALGO_HASH_CODE,
+    "ClamAV Scan": DEDUPE_ALGO_HASH_CODE,
+    "Firmwalker Scan": DEDUPE_ALGO_HASH_CODE,
+    "Nettacker Scan": DEDUPE_ALGO_HASH_CODE,
+    "httpx Scan": DEDUPE_ALGO_HASH_CODE,
+    "Solar Appscreener Scan": DEDUPE_ALGO_HASH_CODE,
+    "Gitleaks Scan": DEDUPE_ALGO_HASH_CODE,
+    "pip-audit Scan": DEDUPE_ALGO_HASH_CODE,
+    "Nancy Scan": DEDUPE_ALGO_HASH_CODE,
+    "Edgescan Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "Bugcrowd API Import": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "Rubocop Scan": DEDUPE_ALGO_HASH_CODE,
+    "JFrog Xray Scan": DEDUPE_ALGO_HASH_CODE,
+    "CycloneDX Scan": DEDUPE_ALGO_HASH_CODE,
+    "SPDX Scan": DEDUPE_ALGO_HASH_CODE,
+    "OpenVEX Scan": DEDUPE_ALGO_HASH_CODE,
+    "CSAF Scan": DEDUPE_ALGO_HASH_CODE,
+    "SSLyze Scan (JSON)": DEDUPE_ALGO_HASH_CODE,
+    "Harbor Vulnerability Scan": DEDUPE_ALGO_HASH_CODE,
+    "Rusty Hog Scan": DEDUPE_ALGO_HASH_CODE,
+    "StackHawk HawkScan": DEDUPE_ALGO_HASH_CODE,
+    "Hydra Scan": DEDUPE_ALGO_HASH_CODE,
+    "DrHeader JSON Importer": DEDUPE_ALGO_HASH_CODE,
+    "PWN SAST": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "Whispers": DEDUPE_ALGO_HASH_CODE,
+    "Blackduck Hub Scan": DEDUPE_ALGO_HASH_CODE,
+    "BlackDuck API": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "Blackduck Binary Analysis": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "docker-bench-security Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "Vulners Scan": DEDUPE_ALGO_HASH_CODE,
+    "Twistlock Image Scan": DEDUPE_ALGO_HASH_CODE,
+    "NeuVector (REST)": DEDUPE_ALGO_HASH_CODE,
+    "NeuVector (compliance)": DEDUPE_ALGO_HASH_CODE,
+    "Wpscan": DEDUPE_ALGO_HASH_CODE,
+    "Popeye Scan": DEDUPE_ALGO_HASH_CODE,
+    "Nuclei Scan": DEDUPE_ALGO_HASH_CODE,
+    "KubeHunter Scan": DEDUPE_ALGO_HASH_CODE,
+    "kube-bench Scan": DEDUPE_ALGO_HASH_CODE,
+    "Threagile risks report": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Humble Json Importer": DEDUPE_ALGO_HASH_CODE,
+    "Wazuh Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "MSDefender Parser": DEDUPE_ALGO_HASH_CODE,
+    "HCLAppScan XML": DEDUPE_ALGO_HASH_CODE,
+    "HCL AppScan on Cloud SAST XML": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "KICS Scan": DEDUPE_ALGO_HASH_CODE,
+    "MobSF Scan": DEDUPE_ALGO_HASH_CODE,
+    "MobSF Scorecard Scan": DEDUPE_ALGO_HASH_CODE,
+    "OSV Scan": DEDUPE_ALGO_HASH_CODE,
+    "Nosey Parker Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    # The bearer fingerprint is not unique across multiple scans, so it shouldn't be used for deduplication (https://github.com/DefectDojo/django-DefectDojo/pull/12346#issuecomment-2841561634)
+    "Bearer CLI": DEDUPE_ALGO_HASH_CODE,
+    "Wiz Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Deepfence Threatmapper Report": DEDUPE_ALGO_HASH_CODE,
+    "Kubescape JSON Importer": DEDUPE_ALGO_HASH_CODE,
+    "Kiuwan SCA Scan": DEDUPE_ALGO_HASH_CODE,
+    "Rapplex Scan": DEDUPE_ALGO_HASH_CODE,
+    "AppCheck Web Application Scanner": DEDUPE_ALGO_HASH_CODE,
+    "AWS Inspector2 Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Legitify Scan": DEDUPE_ALGO_HASH_CODE,
+    "ThreatComposer Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Invicti Scan": DEDUPE_ALGO_HASH_CODE,
+    "Checkmarx CxFlow SAST": DEDUPE_ALGO_HASH_CODE,
+    "KrakenD Audit Scan": DEDUPE_ALGO_HASH_CODE,
+    "PTART Report": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "Red Hat Satellite": DEDUPE_ALGO_HASH_CODE,
+    "Qualys Hacker Guardian Scan": DEDUPE_ALGO_HASH_CODE,
+    "Cyberwatch scan (Galeax)": DEDUPE_ALGO_HASH_CODE,
+    "OpenVAS Parser v2": DEDUPE_ALGO_HASH_CODE,
+    "Snyk Issue API Scan": DEDUPE_ALGO_HASH_CODE,
+    "OpenReports": DEDUPE_ALGO_HASH_CODE,
+    "IriusRisk Threats Scan": DEDUPE_ALGO_HASH_CODE,
+    "Orca Security Alerts": DEDUPE_ALGO_HASH_CODE,
+    "Xygeni SAST Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "Xygeni SCA Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "Xygeni Secrets Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "Qualys VMDR": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Alert Logic Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "PICUS Scan": DEDUPE_ALGO_HASH_CODE,
+    # These three carry a curated HASHCODE_FIELDS_PER_SCANNER list but had no entry here, so
+    # they deduplicated with the legacy algorithm and their hash_code -- correctly computed
+    # from the configured fields -- was never what matching consulted.
+    "Snyk Code Scan": DEDUPE_ALGO_HASH_CODE,
+    "Cycognito Scan": DEDUPE_ALGO_HASH_CODE,
+    "n0s1 Scanner": DEDUPE_ALGO_HASH_CODE,
+    "kube-score Scan": DEDUPE_ALGO_HASH_CODE,
+    "ModelScan Scan": DEDUPE_ALGO_HASH_CODE,
+    "TFLint Scan": DEDUPE_ALGO_HASH_CODE,
+    "Kingfisher Scan": DEDUPE_ALGO_HASH_CODE,
+    "2ms Scan": DEDUPE_ALGO_HASH_CODE,
+    "Quark-Engine Scan": DEDUPE_ALGO_HASH_CODE,
+    "ScubaGoggles Scan": DEDUPE_ALGO_HASH_CODE,
+    "ScubaGear Scan": DEDUPE_ALGO_HASH_CODE,
+    "kubesec Scan": DEDUPE_ALGO_HASH_CODE,
+    "Cloudsplaining Scan": DEDUPE_ALGO_HASH_CODE,
+    "bomber Scan": DEDUPE_ALGO_HASH_CODE,
+    "sbomqs Scan": DEDUPE_ALGO_HASH_CODE,
+    "Pluto Scan": DEDUPE_ALGO_HASH_CODE,
+    "GuardDog Scan": DEDUPE_ALGO_HASH_CODE,
+    "kubent Scan": DEDUPE_ALGO_HASH_CODE,
+    "OpenSSF Scorecard": DEDUPE_ALGO_HASH_CODE,
+    "uv audit Scan": DEDUPE_ALGO_HASH_CODE,
+    "Ansible Lint Scan": DEDUPE_ALGO_HASH_CODE,
+    "ShellCheck Scan": DEDUPE_ALGO_HASH_CODE,
+    "Fickling Scan": DEDUPE_ALGO_HASH_CODE,
+    "Regula Scan": DEDUPE_ALGO_HASH_CODE,
+    "Threat Dragon Scan": DEDUPE_ALGO_HASH_CODE,
+    "Safety Scan": DEDUPE_ALGO_HASH_CODE,
+    "Slither Scan": DEDUPE_ALGO_HASH_CODE,
+    "Binwalk Scan": DEDUPE_ALGO_HASH_CODE,
+    "pip-licenses Scan": DEDUPE_ALGO_HASH_CODE,
+    "Syft SBOM": DEDUPE_ALGO_HASH_CODE,
+    "ScubaGear Report Scan": DEDUPE_ALGO_HASH_CODE,
+    "capa Scan": DEDUPE_ALGO_HASH_CODE,
+    "ScubaGoggles Action Plan": DEDUPE_ALGO_HASH_CODE,
+    "dockerfile_lint Scan": DEDUPE_ALGO_HASH_CODE,
+    "Dodgy Scan": DEDUPE_ALGO_HASH_CODE,
+    "Licensecheck Scan": DEDUPE_ALGO_HASH_CODE,
+    "Noir Scan": DEDUPE_ALGO_HASH_CODE,
+    "Grant Scan": DEDUPE_ALGO_HASH_CODE,
+    "CFRipper Scan": DEDUPE_ALGO_HASH_CODE,
+    "Tartufo Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL,
+    "Prospector Scan": DEDUPE_ALGO_HASH_CODE,
+    "Gixy Scan": DEDUPE_ALGO_HASH_CODE,
+    "Python Taint Scan": DEDUPE_ALGO_HASH_CODE,
+    "Ruff Scan": DEDUPE_ALGO_HASH_CODE,
+    # CodeQL and Psalm both emit SARIF fingerprints, which are more stable across edits than a
+    # file and line, so prefer them and fall back to the hash code when a report has none.
+    "CodeQL Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "Psalm Scan": DEDUPE_ALGO_UNIQUE_ID_FROM_TOOL_OR_HASH_CODE,
+    "PHPStan Scan": DEDUPE_ALGO_HASH_CODE,
+    "Staticcheck Scan": DEDUPE_ALGO_HASH_CODE,
+    "Falco Scan": DEDUPE_ALGO_HASH_CODE,
+    "Tracee Scan": DEDUPE_ALGO_HASH_CODE,
+    "Kyverno Scan": DEDUPE_ALGO_HASH_CODE,
+    "KubeEye Scan": DEDUPE_ALGO_HASH_CODE,
+    "Vuls Scan": DEDUPE_ALGO_HASH_CODE,
+    "terraform-compliance Scan": DEDUPE_ALGO_HASH_CODE,
+    "CloudFormation Guard Scan": DEDUPE_ALGO_HASH_CODE,
+    "Dalfox Scan": DEDUPE_ALGO_HASH_CODE,
+    "PyRIT Scan": DEDUPE_ALGO_HASH_CODE,
+    "debsecan Scan": DEDUPE_ALGO_HASH_CODE,
+    "PMapper Scan": DEDUPE_ALGO_HASH_CODE,
+    # Without this entry Xeol falls through to DEDUPE_ALGO_LEGACY, whose reimport candidate
+    # key is (title.lower(), severity). Xeol's severity is a function of the wall clock, so
+    # that key rewrites itself as time passes even though the report never changed.
+    "Xeol Parser": DEDUPE_ALGO_HASH_CODE,
+    "OPF Scan": DEDUPE_ALGO_HASH_CODE,
+}
+
+# Override the hardcoded settings here via the env var
+if len(env("DD_DEDUPLICATION_ALGORITHM_PER_PARSER")) > 0:
+    env_dedup_algorithm_per_parser = json.loads(env("DD_DEDUPLICATION_ALGORITHM_PER_PARSER"))
+    for key, value in env_dedup_algorithm_per_parser.items():
+        if value not in DEDUPE_ALGOS:
+            msg = f"DEDUP algorithm '{value}' for '{key}' is not valid. Use one of following values: {', '.join(DEDUPE_ALGOS)}"
+            raise AttributeError(msg)
+        if key in DEDUPLICATION_ALGORITHM_PER_PARSER:
+            logger.info(f"Replacing {key} with value {value} (previously set to {DEDUPLICATION_ALGORITHM_PER_PARSER[key]}) from env var DD_DEDUPLICATION_ALGORITHM_PER_PARSER")
+            DEDUPLICATION_ALGORITHM_PER_PARSER[key] = value
+        if key not in DEDUPLICATION_ALGORITHM_PER_PARSER:
+            logger.info("Adding %s with value %s from env var DD_DEDUPLICATION_ALGORITHM_PER_PARSER", key, value)
+            DEDUPLICATION_ALGORITHM_PER_PARSER[key] = value
+
+DUPE_DELETE_MAX_PER_RUN = env("DD_DUPE_DELETE_MAX_PER_RUN")
+
+DISABLE_FINDING_MERGE = env("DD_DISABLE_FINDING_MERGE")
+
+TRACK_IMPORT_HISTORY = env("DD_TRACK_IMPORT_HISTORY")
+IMPORT_REIMPORT_MATCH_BATCH_SIZE = env("DD_IMPORT_REIMPORT_MATCH_BATCH_SIZE")
+IMPORT_REIMPORT_DEDUPE_BATCH_SIZE = env("DD_IMPORT_REIMPORT_DEDUPE_BATCH_SIZE")
+CELERY_QUEUE_PURGE_BATCH_SIZE = env("DD_CELERY_QUEUE_PURGE_BATCH_SIZE")
+CELERY_QUEUE_PURGE_MAX_TASKS = env("DD_CELERY_QUEUE_PURGE_MAX_TASKS")
+
+# ------------------------------------------------------------------------------
+# JIRA
+# ------------------------------------------------------------------------------
+# The 'Bug' issue type is mandatory, as it is used as the default choice.
+JIRA_ISSUE_TYPE_CHOICES_CONFIG = (
+    ("Task", "Task"),
+    ("Story", "Story"),
+    ("Epic", "Epic"),
+    ("Spike", "Spike"),
+    ("Bug", "Bug"),
+    ("Security", "Security"),
+)
+
+if env("DD_JIRA_EXTRA_ISSUE_TYPES"):
+    for extra_type in env("DD_JIRA_EXTRA_ISSUE_TYPES").split(","):
+        JIRA_ISSUE_TYPE_CHOICES_CONFIG += ((extra_type, extra_type),)
+
+JIRA_SSL_VERIFY = env("DD_JIRA_SSL_VERIFY")
+JIRA_DESCRIPTION_MAX_LENGTH = env("DD_JIRA_DESCRIPTION_MAX_LENGTH")
+JIRA_WEBHOOK_ALLOW_FINDING_GROUP_REOPEN = env("DD_JIRA_WEBHOOK_ALLOW_FINDING_GROUP_REOPEN")
+# JIRA connection retry and timeout settings
+JIRA_MAX_RETRIES = env("DD_JIRA_MAX_RETRIES")
+JIRA_CONNECT_TIMEOUT = env("DD_JIRA_CONNECT_TIMEOUT")
+JIRA_READ_TIMEOUT = env("DD_JIRA_READ_TIMEOUT")
+# Combine timeouts into a tuple for the JIRA library: (connect_timeout, read_timeout)
+JIRA_TIMEOUT = (JIRA_CONNECT_TIMEOUT, JIRA_READ_TIMEOUT)
+
+# ------------------------------------------------------------------------------
+# LOGGING
+# ------------------------------------------------------------------------------
+# See http://docs.djangoproject.com/en/dev/topics/logging for
+# more details on how to customize your logging configuration.
+LOGGING_HANDLER = env("DD_LOGGING_HANDLER")
+
+LOG_LEVEL = env("DD_LOG_LEVEL")
+if not LOG_LEVEL:
+    LOG_LEVEL = "DEBUG" if DEBUG else "INFO"
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "[%(asctime)s] %(levelname)s [%(name)s:%(lineno)d] %(message)s",
+            "datefmt": "%d/%b/%Y %H:%M:%S",
+        },
+        "simple": {
+            "format": "%(levelname)s %(funcName)s %(lineno)d %(message)s",
+        },
+        "json": {
+            "()": "json_log_formatter.JSONFormatter",
+        },
+    },
+    "filters": {
+        "require_debug_false": {
+            "()": "django.utils.log.RequireDebugFalse",
+        },
+        "require_debug_true": {
+            "()": "django.utils.log.RequireDebugTrue",
+        },
+    },
+    "handlers": {
+        "mail_admins": {
+            "level": "ERROR",
+            "filters": ["require_debug_false"],
+            "class": "django.utils.log.AdminEmailHandler",
+        },
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
+        },
+        "json_console": {
+            "class": "logging.StreamHandler",
+            "formatter": "json",
+        },
+    },
+    "loggers": {
+        "django.request": {
+            "handlers": ["mail_admins", "console"],
+            "level": str(LOG_LEVEL),
+            "propagate": False,
+        },
+        "django.security": {
+            "handlers": [rf"{LOGGING_HANDLER}"],
+            "level": str(LOG_LEVEL),
+            "propagate": False,
+        },
+        "celery": {
+            "handlers": [rf"{LOGGING_HANDLER}"],
+            "level": str(CELERY_LOG_LEVEL),
+            "propagate": False,
+            # workaround some celery logging known issue
+            "worker_hijack_root_logger": False,
+        },
+        "dojo": {
+            "handlers": [rf"{LOGGING_HANDLER}"],
+            "level": str(LOG_LEVEL),
+            "propagate": False,
+        },
+        "dojo.specific-loggers.deduplication": {
+            "handlers": [rf"{LOGGING_HANDLER}"],
+            "level": str(LOG_LEVEL),
+            "propagate": False,
+        },
+        "MARKDOWN": {
+            # The markdown library is too verbose in it's logging, reducing the verbosity in our logs.
+            "handlers": [rf"{LOGGING_HANDLER}"],
+            "level": str(LOG_LEVEL),
+            "propagate": False,
+        },
+        "titlecase": {
+            # The titlecase library is too verbose in it's logging, reducing the verbosity in our logs.
+            "handlers": [rf"{LOGGING_HANDLER}"],
+            "level": str(LOG_LEVEL),
+            "propagate": False,
+        },
+    },
+}
+
+# override filter to ensure sensitive variables are also hidden when DEBUG = True
+DEFAULT_EXCEPTION_REPORTER_FILTER = "dojo.settings.exception_filter.CustomExceptionReporterFilter"
+
+# Issue on benchmark : "The number of GET/POST parameters exceeded settings.DATA_UPLOAD_MAX_NUMBER_FIELD S"
+# Configurable so operators can raise it for instances that legitimately submit very large
+# scan imports (many form fields), mirroring DD_DATA_UPLOAD_MAX_MEMORY_SIZE above.
+DATA_UPLOAD_MAX_NUMBER_FIELDS = env("DD_DATA_UPLOAD_MAX_NUMBER_FIELDS")
+
+# Maximum size of a scan file in MB
+SCAN_FILE_MAX_SIZE = env("DD_SCAN_FILE_MAX_SIZE")
+
+# Apply a severity level to "Security Weaknesses" in Qualys WAS
+QUALYS_WAS_WEAKNESS_IS_VULN = env("DD_QUALYS_WAS_WEAKNESS_IS_VULN")
+
+# Create a unique finding for all findings in qualys WAS parser
+# If using this, also set DD_DEDUPLICATION_ALGORITHM_PER_PARSER={"Qualys Webapp Scan": "unique_id_from_tool"}
+# so reimport matches findings by their Qualys unique ID (see the Qualys Webapp Scan parser docs)
+QUALYS_WAS_UNIQUE_ID = env("DD_QUALYS_WAS_UNIQUE_ID")
+
+SERIALIZATION_MODULES = {
+    "xml": "django_tagulous.serializers.xml_serializer",
+    "json": "django_tagulous.serializers.json",
+    "python": "django_tagulous.serializers.python",
+    "yaml": "django_tagulous.serializers.pyyaml",
+}
+
+# There seems to be no way just use the default and just leave out jquery, so we have to copy...
+# ... and keep it up-to-date.
+TAGULOUS_AUTOCOMPLETE_JS = (
+    # 'tagulous/lib/jquery.js',
+    "tagulous/lib/select2-4/js/select2.full.min.js",
+    "tagulous/tagulous.js",
+    "tagulous/adaptor/select2-4.js",
+)
+
+# using 'element' for width should take width from css defined in template, but it doesn't. So set to 70% here.
+TAGULOUS_AUTOCOMPLETE_SETTINGS = {"placeholder": "Enter some tags (comma separated, use enter to select / create a new tag)", "width": "70%"}
+
+# Configure tagulous slug truncate unique setting if provided
+# If not set (value is -1), tagulous will use its internal default value of 5
+if (truncate_unique := env("DD_TAGULOUS_SLUG_TRUNCATE_UNIQUE")) != -1:
+    TAGULOUS_SLUG_TRUNCATE_UNIQUE = truncate_unique
+
+EDITABLE_MITIGATED_DATA = env("DD_EDITABLE_MITIGATED_DATA")
+
+# FEATURE_FINDING_GROUPS feature is moved to system_settings, will be removed from settings file
+FEATURE_FINDING_GROUPS = env("DD_FEATURE_FINDING_GROUPS")
+JIRA_TEMPLATE_ROOT = env("DD_JIRA_TEMPLATE_ROOT")
+TEMPLATE_DIR_PREFIX = env("DD_TEMPLATE_DIR_PREFIX")
+
+DUPLICATE_CLUSTER_CASCADE_DELETE = env("DD_DUPLICATE_CLUSTER_CASCADE_DELETE")
+
+# Deside if SonarQube API parser should download the security hotspots
+SONARQUBE_API_PARSER_HOTSPOTS = env("DD_SONARQUBE_API_PARSER_HOTSPOTS")
+
+# When enabled, deleting objects will be occur from the bottom up. In the example of deleting an engagement
+# The objects will be deleted as follows Endpoints -> Findings -> Tests -> Engagement
+ASYNC_OBJECT_DELETE = env("DD_ASYNC_OBJECT_DELETE")
+# The number of objects to be deleted per celeryworker
+ASYNC_OBEJECT_DELETE_CHUNK_SIZE = env("DD_ASYNC_OBEJECT_DELETE_CHUNK_SIZE")
+# When enabled, display the preview of objects to be deleted. This can take a long time to render
+# for very large objects
+DELETE_PREVIEW = env("DD_DELETE_PREVIEW")
+
+SILENCED_SYSTEM_CHECKS = env("DD_SILENCED_SYSTEM_CHECKS")
+
+VULNERABILITY_URLS = {
+    "ALAS": "https://alas.aws.amazon.com/AL2/&&.html",  # e.g. https://alas.aws.amazon.com/alas2.html
+    "ALBA-": "https://osv.dev/vulnerability/",  # e.g. https://osv.dev/vulnerability/ALBA-2019:3411
+    "ALEA-": "https://errata.almalinux.org/8/&&.html",  # e.g. https://errata.almalinux.org/8/ALEA-2022-1998.html
+    "ALINUX2-SA-": "https://mirrors.aliyun.com/alinux/cve/",  # e.g. https://mirrors.aliyun.com/alinux/cve/alinux2-sa-20250007.xml
+    "ALINUX3-SA-": "https://mirrors.aliyun.com/alinux/3/cve/",  # e.g. https://mirrors.aliyun.com/alinux/3/cve/alinux3-sa-20250059.xml
+    "ALSA-": "https://osv.dev/vulnerability/",  # e.g. https://osv.dev/vulnerability/ALSA-2024:0827
+    "ASA-": "https://security.archlinux.org/",  # e.g. https://security.archlinux.org/ASA-202003-8
+    "AVD": "https://avd.aquasec.com/misconfig/",  # e.g. https://avd.aquasec.com/misconfig/avd-ksv-01010
+    "AWS-": "https://aws.amazon.com/security/security-bulletins/",  # e.g. https://aws.amazon.com/security/security-bulletins/AWS-2025-001
+    "BAM-": "https://jira.atlassian.com/browse/",  # e.g. https://jira.atlassian.com/browse/BAM-25498
+    "BELL-SA-": "https://docs.bell-sw.com/security/advisories/",  # e.g. https://docs.bell-sw.com/security/advisories/BELL-SA-2026-6
+    "BSERV-": "https://jira.atlassian.com/browse/",  # e.g. https://jira.atlassian.com/browse/BSERV-19020
+    "C-": "https://hub.armosec.io/docs/",  # e.g. https://hub.armosec.io/docs/c-0085
+    "CAPEC": "https://capec.mitre.org/data/definitions/&&.html",  # e.g. https://capec.mitre.org/data/definitions/157.html
+    "CERTFR-": "https://www.cert.ssi.gouv.fr/alerte/",  # e.g. https://www.cert.ssi.gouv.fr/alerte/CERTFR-2025-ALE-012"
+    "CGA-": "https://images.chainguard.dev/security/",  # e.g. https://images.chainguard.dev/security/CGA-24pq-h5fw-43v3
+    "CISCO-SA-": "https://sec.cloudapps.cisco.com/security/center/content/CiscoSecurityAdvisory/",  # e.g. https://sec.cloudapps.cisco.com/security/center/content/CiscoSecurityAdvisory/cisco-sa-umbrella-tunnel-gJw5thgE
+    "CNNVD-": "https://vulners.com/cnnvd/",  # e.g. https://vulners.com/cnnvd/CNNVD-202601-2391
+    "CONFSERVER-": "https://jira.atlassian.com/browse/",  # e.g. https://jira.atlassian.com/browse/CONFSERVER-93361
+    "CVE-": "https://nvd.nist.gov/vuln/detail/",  # e.g. https://nvd.nist.gov/vuln/detail/cve-2022-22965
+    "CWE": "https://cwe.mitre.org/data/definitions/&&.html",  # e.g. https://cwe.mitre.org/data/definitions/79.html
+    "DLA-": "https://security-tracker.debian.org/tracker/",  # e.g. https://security-tracker.debian.org/tracker/DLA-3917-1
+    "DSA-": "https://security-tracker.debian.org/tracker/",  # e.g. https://security-tracker.debian.org/tracker/DSA-5791-1
+    "DTSA-": "https://security-tracker.debian.org/tracker/",  # e.g. https://security-tracker.debian.org/tracker/DTSA-41-1
+    "ELA-": "https://www.freexian.com/lts/extended/updates/",  # e.g. https://www.freexian.com/lts/extended/updates/ela-1387-1-erlang
+    "ELBA-": "https://linux.oracle.com/errata/&&.html",  # e.g. https://linux.oracle.com/errata/ELBA-2024-7457.html
+    "ELSA-": "https://linux.oracle.com/errata/&&.html",  # e.g. https://linux.oracle.com/errata/ELSA-2024-12714.html
+    "EUVD-": "https://euvd.enisa.europa.eu/vulnerability/",  # e.g. https://euvd.enisa.europa.eu/vulnerability/EUVD-2025-17599
+    "FEDORA-": "https://bodhi.fedoraproject.org/updates/",  # e.g. https://bodhi.fedoraproject.org/updates/FEDORA-EPEL-2024-06aa7dc422
+    "FG-IR-": "https://www.fortiguard.com/psirt/",  # e.g. https://www.fortiguard.com/psirt/FG-IR-24-373
+    "GHSA-": "https://github.com/advisories/",  # e.g. https://github.com/advisories/GHSA-58vj-cv5w-v4v6
+    "GLSA": "https://security.gentoo.org/",  # e.g. https://security.gentoo.org/glsa/202409-32
+    "GO-": "https://pkg.go.dev/vuln/",  # e.g. https://pkg.go.dev/vuln/GO-2025-3703
+    "GSD-": "https://cvepremium.circl.lu/vuln/",  # e.g. https://cvepremium.circl.lu/vuln/gsd-2021-34715
+    "ICSA-": "https://cvepremium.circl.lu/recent/",  # e.g. https://cvepremium.circl.lu/vuln/ICSA-25-317-01
+    "JSDSERVER-": "https://jira.atlassian.com/browse/",  # e.g. https://jira.atlassian.com/browse/JSDSERVER-14872
+    "JVNDB-": "https://jvndb.jvn.jp/en/contents/",  # e.g. https://jvndb.jvn.jp/en/contents/2025/JVNDB-2025-004079.html
+    "KB": "https://support.hcl-software.com/csm?id=kb_article&sysparm_article=",  # e.g. https://support.hcl-software.com/csm?id=kb_article&sysparm_article=KB0108401
+    "KHV": "https://avd.aquasec.com/misconfig/kubernetes/",  # e.g. https://avd.aquasec.com/misconfig/kubernetes/khv045
+    "KSA-": "https://www.krones.com/media/downloads/KRONES-Security-Advisory-&&.pdf",  # e.g. https://www.krones.com/media/downloads/KRONES-Security-Advisory-KSA-2025-2.pdf
+    "LEN-": "https://support.lenovo.com/cl/de/product_security/",  # e.g. https://support.lenovo.com/cl/de/product_security/LEN-94953
+    "MAL-": "https://cvepremium.circl.lu/vuln/",  # e.g. https://cvepremium.circl.lu/vuln/mal-2025-49305
+    "MFSA": "https://www.mozilla.org/en-US/security/advisories/",  # e.g. https://www.mozilla.org/en-US/security/advisories/mfsa2025-01/
+    "MGAA-": "https://advisories.mageia.org/&&.html",  # e.g. https://advisories.mageia.org/MGAA-2013-0054.html
+    "MGASA-": "https://advisories.mageia.org/&&.html",  # e.g. https://advisories.mageia.org/MGASA-2025-0023.html
+    "MSRC_": "https://cvepremium.circl.lu/vuln/",  # e.g. https://cvepremium.circl.lu/vuln/msrc_cve-2025-59200
+    "NCSC-": "https://advisories.ncsc.nl/advisory?id=",  # e.g. https://advisories.ncsc.nl/advisory?id=NCSC-2025-0191
+    "NN-": "https://cvepremium.circl.lu/vuln/",  # e.g. https://cvepremium.circl.lu/vuln/NN-2021:2-01
+    "NTAP-": "https://security.netapp.com/advisory/",  # e.g. https://security.netapp.com/advisory/ntap-20250328-0007
+    "OPENSUSE-SU-": "https://osv.dev/vulnerability/",  # e.g. https://osv.dev/vulnerability/openSUSE-SU-2025:14898-1
+    "OSV-": "https://osv.dev/vulnerability/",  # e.g. https://osv.dev/vulnerability/OSV-2024-1330
+    "OXAS-ADV-": "https://cvepremium.circl.lu/vuln/",  # e.g. https://cvepremium.circl.lu/vuln/OXAS-ADV-2023-0001
+    "PAN-SA-": "https://security.paloaltonetworks.com/",  # e.g. https://security.paloaltonetworks.com/PAN-SA-2024-0010
+    "PFPT-SA-": "https://www.proofpoint.com/us/security/security-advisories/",  # e.g. https://www.proofpoint.com/us/security/security-advisories/pfpt-sa-0002
+    "PMASA-": "https://www.phpmyadmin.net/security/",  # e.g. https://www.phpmyadmin.net/security/PMASA-2025-1
+    "PYSEC-": "https://osv.dev/vulnerability/",  # e.g. https://osv.dev/vulnerability/PYSEC-2024-48
+    "RHBA-": "https://access.redhat.com/errata/",  # e.g. https://access.redhat.com/errata/RHBA-2024:2406
+    "RHEA-": "https://access.redhat.com/errata/",  # e.g. https://access.redhat.com/errata/RHEA-2024:8857
+    "RHSA-": "https://access.redhat.com/errata/",  # e.g. https://access.redhat.com/errata/RHSA-2023:5616
+    "RLBA-": "https://errata.rockylinux.org/",  # e.g. https://errata.rockylinux.org/RLBA-2024:6968
+    "RLSA-": "https://errata.rockylinux.org/",  # e.g. https://errata.rockylinux.org/RLSA-2024:7001
+    "RUSTSEC-": "https://rustsec.org/advisories/",  # e.g. https://rustsec.org/advisories/RUSTSEC-2024-0432
+    "RXSA-": "https://errata.rockylinux.org/",  # e.g. https://errata.rockylinux.org/RXSA-2024:4928
+    "SCA-": "https://cvepremium.circl.lu/vuln/",  # e.g. https://cvepremium.circl.lu/vuln/sca-2020-0002
+    "SNYK-": "https://snyk.io/vuln/",  # e.g. https://security.snyk.io/vuln/SNYK-JS-SOLANAWEB3JS-8453984
+    "SOPHOS-SA-": "https://www.sophos.com/en-us/security-advisories/",  # e.g. https://www.sophos.com/en-us/security-advisories/sophos-sa-20250411-taegis-agent-lpe
+    "SSA:": "https://vulners.com/slackware/",  # e.g. https://www.tenable.com/plugins/nessus/240171 --> https://vulners.com/slackware/SSA-2025-169-02
+    "SSA-": "https://vulners.com/slackware/",  # e.g. https://vulners.com/slackware/SSA-2025-074-01
+    "SP-": "https://advisory.splunk.com/advisories/",  # e.g. https://advisory.splunk.com/advisories/SP-CAAANR7
+    "SUSE-SU-": "https://www.suse.com/support/update/announcement/",  # e.g. https://www.suse.com/support/update/announcement/2024/suse-su-20244196-1
+    "SVD-": "https://advisory.splunk.com/advisories/",  # e.g. https://advisory.splunk.com/advisories/SVD-2025-0103
+    "TEMP-": "https://security-tracker.debian.org/tracker/",  # e.g. https://security-tracker.debian.org/tracker/TEMP-0841856-B18BAF
+    "TS-": """https://tailscale.com/security-bulletins#""",  # e.g. https://tailscale.com/security-bulletins or https://tailscale.com/security-bulletins#ts-2022-001-1243
+    "TYPO3-": "https://typo3.org/security/advisory/",  # e.g. https://typo3.org/security/advisory/typo3-core-sa-2025-010
+    "USN-": "https://ubuntu.com/security/notices/",  # e.g. https://ubuntu.com/security/notices/USN-6642-1
+    "VA-": "https://cvepremium.circl.lu/vuln/",  # e.g. https://cvepremium.circl.lu/vuln/va-25-282-01
+    "VAR-": "https://cvepremium.circl.lu/vuln/",  # e.g. https://cvepremium.circl.lu/vuln/var-201801-0152
+    "VNS": "https://vulners.com/",
+    "WGSA-": "https://www.watchguard.com/wgrd-psirt/advisory/",  # e.g. https://www.watchguard.com/wgrd-psirt/advisory/wgsa-2026-00008
+    "WID-SEC-W-": "https://cvepremium.circl.lu/vuln/",  # e.g. https://cvepremium.circl.lu/vuln/wid-sec-w-2025-1468
+}
+# List of acceptable file types that can be uploaded to a given object via arbitrary file upload
+FILE_UPLOAD_TYPES = env("DD_FILE_UPLOAD_TYPES")
+# List of acceptable file types that can be (re)imported
+FILE_IMPORT_TYPES = env("DD_FILE_IMPORT_TYPES")
+# Fixes error
+# AUDITLOG_DISABLE_ON_RAW_SAVE is imported from dojo.auditlog.settings at the top of this file.
+#  You can set extra Jira headers by suppling a dictionary in header: value format (pass as env var like "headr_name=value,another_header=anohter_value")
+ADDITIONAL_HEADERS = env("DD_ADDITIONAL_HEADERS")
+# ------------------------------------------------------------------------------
+# Auditlog
+# ------------------------------------------------------------------------------
+AUDITLOG_FLUSH_RETENTION_PERIOD = env("DD_AUDITLOG_FLUSH_RETENTION_PERIOD")
+AUDITLOG_FLUSH_BATCH_SIZE = env("DD_AUDITLOG_FLUSH_BATCH_SIZE")
+AUDITLOG_FLUSH_MAX_BATCHES = env("DD_AUDITLOG_FLUSH_MAX_BATCHES")
+
+USE_FIRST_SEEN = env("DD_USE_FIRST_SEEN")
+USE_QUALYS_LEGACY_SEVERITY_PARSING = env("DD_QUALYS_LEGACY_SEVERITY_PARSING")
+MASS_HASH_CODE_USE_SQL_WRITER = env("DD_MASS_HASH_CODE_USE_SQL_WRITER")
+
+# ------------------------------------------------------------------------------
+# Notifications
+# ------------------------------------------------------------------------------
+# NOTIFICATIONS_SYSTEM_LEVEL_TRUMP is populated by dojo.notifications.settings.populate_settings.
+
+# ------------------------------------------------------------------------------
+# Timeouts
+# ------------------------------------------------------------------------------
+REQUESTS_TIMEOUT = env("DD_REQUESTS_TIMEOUT")
+
+# ------------------------------------------------------------------------------
+# Ignored Warnings
+# ------------------------------------------------------------------------------
+# These warnings are produce by polymorphic beacuser of weirdness around cascade deletes. We had to do
+# some pretty out of pocket things to correct this behaviors to correct this weirdness, and therefore
+# some warnings are produced trying to steer us in the right direction. Ignore those
+# Reference issue: https://github.com/jazzband/django-polymorphic/issues/229
+warnings.filterwarnings("ignore", message="polymorphic.base.ManagerInheritanceWarning.*")
+warnings.filterwarnings("ignore", message="PolymorphicModelBase._default_manager.*")
+
+
+# The setting is here to avoid RemovedInDjango60Warning. It is here only for transition period.
+# TODO: - Remove this setting in Django 6.0
+# TODO: More info:
+# Context:
+# uwsgi-1  |   File "/app/dojo/forms.py", line 515, in ImportScanForm
+# uwsgi-1  |     source_code_management_uri = forms.URLField(max_length=600, required=False, help_text="Resource link to source code")
+# uwsgi-1  |                                  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+# uwsgi-1  |   File "/usr/local/lib/python3.11/site-packages/django/forms/fields.py", line 769, in __init__
+# uwsgi-1  |     warnings.warn(
+# uwsgi-1  | django.utils.deprecation.RemovedInDjango60Warning: The default scheme will be changed from 'http' to 'https' in Django 6.0. Pass the forms.URLField.assume_scheme argument to silence this warning, or set the FORMS_URLFIELD_ASSUME_HTTPS transitional setting to True to opt into using 'https' as the new default scheme.
+# +
+# uwsgi-1  |   File "/usr/local/lib/python3.11/site-packages/django/conf/__init__.py", line 214, in __init__
+# uwsgi-1  |     warnings.warn(
+# uwsgi-1  | django.utils.deprecation.RemovedInDjango60Warning: The FORMS_URLFIELD_ASSUME_HTTPS transitional setting is deprecated.
+warnings.filterwarnings("ignore", "The FORMS_URLFIELD_ASSUME_HTTPS transitional setting is deprecated.")
+FORMS_URLFIELD_ASSUME_HTTPS = True
+# Inspired by https://adamj.eu/tech/2023/12/07/django-fix-urlfield-assume-scheme-warnings/
+
+if DEBUG:
+    # adding DEBUG logging for all of Django.
+    LOGGING["loggers"]["root"] = {
+                "handlers": ["console"],
+                "level": "DEBUG",
+           }
+
+if DJANGO_DEBUG_TOOLBAR_ENABLED:
+
+    INSTALLED_APPS += (
+    "debug_toolbar",
+    )
+
+    MIDDLEWARE = ["debug_toolbar.middleware.DebugToolbarMiddleware", *MIDDLEWARE]
+
+if DEBUG:
+    def show_toolbar(request):
+        return True
+
+    DEBUG_TOOLBAR_CONFIG = {
+        "SHOW_TOOLBAR_CALLBACK": show_toolbar,
+        "INTERCEPT_REDIRECTS": False,
+        "SHOW_COLLAPSED": True,
+    }
+
+    DEBUG_TOOLBAR_PANELS = [
+        # 'ddt_request_history.panels.request_history.RequestHistoryPanel',  # Here it is
+        "debug_toolbar.panels.versions.VersionsPanel",
+        "debug_toolbar.panels.timer.TimerPanel",
+        "debug_toolbar.panels.settings.SettingsPanel",
+        "debug_toolbar.panels.headers.HeadersPanel",
+        "debug_toolbar.panels.request.RequestPanel",
+        "debug_toolbar.panels.sql.SQLPanel",
+        "debug_toolbar.panels.templates.TemplatesPanel",
+        # 'debug_toolbar.panels.staticfiles.StaticFilesPanel',
+        "debug_toolbar.panels.cache.CachePanel",
+        "debug_toolbar.panels.signals.SignalsPanel",
+        # 'debug_toolbar.panels.logging.LoggingPanel',
+        "debug_toolbar.panels.redirects.RedirectsPanel",
+        "debug_toolbar.panels.profiling.ProfilingPanel",
+        # 'cachalot.panels.CachalotPanel',
+    ]
+
+#########################################################################################################
+# Auditlog configuration                                                                                #
+#########################################################################################################
+
+# PGHISTORY_FOREIGN_KEY_FIELD, PGHISTORY_CONTEXT_FIELD, and PGHISTORY_OBJ_FIELD
+# are imported from dojo.auditlog.settings at the top of this file.
+
+#########################################################################################################
+# End of Auditlog configuration                                                                          #
+#########################################################################################################

@@ -1,0 +1,73 @@
+import csv
+import hashlib
+import io
+
+from dojo.location.feature import locations_enabled
+from dojo.models import Finding
+from dojo.tools.locations import LocationData
+
+
+class PmdParser:
+    def get_scan_types(self):
+        return ["PMD Scan"]
+
+    def get_label_for_scan_types(self, scan_type):
+        return scan_type
+
+    def get_description_for_scan_types(self, scan_type):
+        return "CSV Report"
+
+    def get_findings(self, filename, test):
+        dupes = {}
+
+        content = filename.read()
+        if isinstance(content, bytes):
+            content = content.decode("utf-8")
+        reader = list(
+            csv.DictReader(io.StringIO(content), delimiter=",", quotechar='"'),
+        )
+
+        for row in reader:
+            finding = Finding(test=test)
+            finding.title = f'PMD rule {row["Rule"]}'
+            if row["Priority"] == "5":
+                priority = "Critical"
+            elif row["Priority"] == "4":
+                priority = "High"
+            elif row["Priority"] == "3":
+                priority = "Medium"
+            elif row["Priority"] == "2":
+                priority = "Low"
+            elif row["Priority"] == "1":
+                priority = "Info"
+            else:
+                priority = "Info"
+            finding.severity = priority
+
+            description = "Description: {}\n".format(
+                row["Description"].strip(),
+            )
+            description += "Rule set: {}\n".format(row["Rule set"].strip())
+            description += "Problem: {}\n".format(row["Problem"].strip())
+            description += "Package: {}\n".format(row["Package"].strip())
+            finding.description = description
+            finding.line = row["Line"]
+            finding.file_path = row["File"]
+            finding.impact = "No impact provided"
+            finding.mitigation = "No mitigation provided"
+
+            if locations_enabled() and finding.file_path:
+                line = row["Line"]
+                line = int(line) if line is not None and str(line).isdigit() else None
+                finding.unsaved_locations.append(
+                    LocationData.code(file_path=finding.file_path, line=line),
+                )
+
+            key = hashlib.sha256(
+                f"{finding.title}|{finding.description}|{finding.file_path}|{finding.line}".encode(),
+            ).hexdigest()
+
+            if key not in dupes:
+                dupes[key] = finding
+
+        return list(dupes.values())

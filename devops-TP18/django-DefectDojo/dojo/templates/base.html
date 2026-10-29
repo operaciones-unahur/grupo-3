@@ -1,0 +1,1053 @@
+{% load navigation_tags %}
+{% load display_tags %}
+{% load authorization_tags %}
+{% load i18n %}
+{% load static %}
+{% get_current_language as LANGUAGE_CODE %}
+{% get_current_language_bidi as LANGUAGE_BIDI %}
+<!DOCTYPE html>
+<html lang="{{ LANGUAGE_CODE }}" dir="{% if LANGUAGE_BIDI %}rtl{% else %}ltr{% endif %}">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="X-UA-Compatible" content="IE=edge">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="description" content="">
+        <meta name="author" content="">
+        <title>
+            {% if request.session.dojo_breadcrumbs and not product_tab.tab %}
+                {% with request.session.dojo_breadcrumbs|last as last %}
+                    {{ last.title }} |
+                {% endwith %}
+            {% elif product_tab.title %}
+                {{ product_tab.title }} |
+            {% endif %}
+            DefectDojo
+        </title>
+        {% block add_css_before %}
+        {% endblock %}
+
+        <!-- jQuery (required by DataTables, jQuery UI, fullcalendar) -->
+        <script src="{% static "jquery/dist/jquery.min.js" %}"></script>
+        <!-- jQuery UI (autocomplete, accordion) -->
+        <script src="{% static "jquery-ui/dist/jquery-ui.min.js" %}"></script>
+        <!-- Flatpickr (modern datepicker replacement) -->
+        <script src="{% static "flatpickr/dist/flatpickr.min.js" %}"></script>
+        <!-- Bootstrap JS removed — replaced by shims in index.js -->
+
+        <script src="{% static "chosen-js/chosen.jquery.min.js" %}"></script>
+
+        <!-- Calendar -->
+        <script src="{% static "moment/min/moment.min.js" %}"></script>
+        <script src="{% static "fullcalendar/dist/fullcalendar.min.js" %}"></script>
+        <!-- DataTables -->
+        <!-- Core DataTables only — the Bootstrap styling integrations were
+             dropped; markup is styled by datatables-dd.css against DataTables'
+             own dt-* classes. -->
+        <script src="{% static 'datatables.net/js/dataTables.min.js' %}"></script>
+        <script src="{% static 'datatables.net-buttons/js/dataTables.buttons.min.js' %}"></script>
+        <script src="{% static 'datatables.net-buttons/js/buttons.html5.min.js' %}"></script>
+        <script src="{% static 'datatables.net-buttons/js/buttons.colVis.min.js' %}"></script>
+        <script src="{% static 'datatables.net-buttons/js/buttons.print.min.js' %}"></script>
+        <script src="{% static 'datatables.net-colreorder/js/dataTables.colReorder.min.js' %}"></script>
+
+        <script src="{% static "pdfmake/build/pdfmake.min.js" %}"></script>
+        <script src="{% static "pdfmake/build/vfs_fonts.js" %}"></script>
+        <script src="{% static "jszip/dist/jszip.min.js" %}"></script>
+
+        <!-- htmx -->
+        <script src="{% static "dojo/js/vendor/htmx.min.js" %}" defer></script>
+
+        <!-- Alpine.js -->
+        <script defer src="{% static "dojo/js/vendor/alpine.min.js" %}"></script>
+
+        <!-- Bootstrap CSS removed — all styles in tailwind-out.css + dojo.css -->
+
+        <!-- Font Awesome 6 -->
+        <link href="{% static 'fontawesomefree/css/fontawesome.min.css' %}" rel="stylesheet" type="text/css">
+        <link href="{% static 'fontawesomefree/css/brands.min.css' %}" rel="stylesheet" type="text/css">
+        <link href="{% static 'fontawesomefree/css/solid.min.css' %}" rel="stylesheet" type="text/css">
+
+        {% block add_css %}
+        {% endblock %}
+        <link rel="stylesheet" href="{% static "jquery-ui/dist/themes/flick/jquery-ui.min.css" %}">
+        <link rel="stylesheet" href="{% static "flatpickr/dist/flatpickr.min.css" %}">
+        <link rel="icon" type="image/svg+xml" href="{% static "dojo/img/favicon.svg" %}"/>
+        <link rel="alternate icon" type="image/png" href="{% static "dojo/img/favicon.png" %}"/>
+        <link rel="stylesheet" href="{% static "chosen-bootstrap/chosen.bootstrap.min.css" %}">
+        <link rel="stylesheet" href="{% static "fullcalendar/dist/fullcalendar.min.css" %}">
+        {% block dojo_css %}
+            <link rel="stylesheet" href="{% static "dojo/css/dojo.css" %}?v={% static_v "dojo/css/dojo.css" %}">
+        {% endblock %}
+        <link rel="stylesheet" href="{% static "dojo/css/datatables-dd.css" %}?v={% static_v "dojo/css/datatables-dd.css" %}">
+
+        <!-- Tailwind CSS (compiled output — loaded last to override) -->
+        <link rel="stylesheet" href="{% static "dojo/css/tailwind-out.css" %}?v={% static_v "dojo/css/tailwind-out.css" %}">
+
+        <style>
+            /* Layout shell — not in Tailwind because these are structural, not component styles */
+            :root {
+                --dd-sidebar-width: 14rem;
+                --dd-topbar-height: 3.5rem;
+            }
+            /* Sidebar: the brand app frame. Dust ground, Midnight ink, teal-grey
+               support tones; hover lifts to the raised Dust step. */
+            #dd-sidebar {
+                scrollbar-width: thin;
+                scrollbar-color: var(--color-border-strong) transparent;
+                background: var(--color-frame);
+                color: var(--color-text);
+                border-inline-end: 1px solid var(--color-border);
+            }
+            /* Override dojo.css 'a' color inside sidebar */
+            #dd-sidebar a,
+            #dd-sidebar button {
+                color: var(--color-text);
+                font-size: 0.95rem;
+                font-weight: 500;
+                text-decoration: none;
+                border-radius: 0.5rem;
+                margin-inline: 0.5rem;
+            }
+            #dd-sidebar a:hover,
+            #dd-sidebar button:hover {
+                color: var(--color-text);
+                background: var(--color-surface-3);
+            }
+            #dd-sidebar nav i.fa-solid {
+                font-size: 1.05rem;
+                color: var(--color-text-muted);
+            }
+            #dd-sidebar nav i.fa-chevron-right {
+                font-size: 0.7rem;
+            }
+            /* Sub-nav items (inside expandable sections) */
+            #dd-sidebar div[x-data] > div a {
+                color: var(--color-text-muted);
+                font-size: 0.875rem;
+                font-weight: 400;
+            }
+            #dd-sidebar div[x-data] > div a:hover {
+                color: var(--color-text);
+            }
+            #dd-sidebar div[x-data] > div {
+                background: transparent;
+            }
+            /* Logo area */
+            #dd-sidebar .dd-logo-bar {
+                background: var(--color-frame);
+                border-bottom: 1px solid var(--color-border);
+            }
+            #dd-sidebar .dd-logo-bar a {
+                margin-inline: 0;
+                border-radius: 0;
+            }
+            #dd-sidebar .dd-logo-bar a:hover {
+                background: transparent;
+            }
+            /* Override dojo.css #page-wrapper rules since we use a new layout */
+            #page-wrapper { margin: 0 !important; padding: 0 !important; }
+            #footer-wrapper { margin: 0 !important; }
+            /* Neutralize SB Admin 2 / Bootstrap navbar rules on our new layout */
+            .dd-topbar, .dd-sidebar-inner { all: unset; }
+
+            /* ===== RTL (e.g. Arabic) ===== */
+            /* Mirror horizontally-directional icons so they point the right way */
+            [dir="rtl"] .fa-chevron-left,  [dir="rtl"] .fa-chevron-right,
+            [dir="rtl"] .fa-angle-left,    [dir="rtl"] .fa-angle-right,
+            [dir="rtl"] .fa-angles-left,   [dir="rtl"] .fa-angles-right,
+            [dir="rtl"] .fa-arrow-left,    [dir="rtl"] .fa-arrow-right,
+            [dir="rtl"] .fa-caret-left,    [dir="rtl"] .fa-caret-right { transform: scaleX(-1); }
+            /* Keep technical tokens (CVE/CVSS/URLs/code) readable left-to-right inside RTL text */
+            [dir="rtl"] code, [dir="rtl"] pre, [dir="rtl"] .font-mono, [dir="rtl"] .dd-ltr {
+                unicode-bidi: isolate;
+                direction: ltr;
+            }
+
+            {% block add_styles %}
+            {% endblock %}
+        </style>
+    </head>
+
+    <body x-data="{ mobileMenu: false }"
+          hx-headers='{"X-CSRFToken": "{{ csrf_token }}"}'
+          class="bg-ground text-text antialiased">
+
+        {% block pre_wrapper %}
+        {% endblock pre_wrapper %}
+
+        {% block navigation %}
+        {% if request.user.is_authenticated %}
+            <!-- ===== Sidebar ===== -->
+            <aside id="dd-sidebar"
+                   class="fixed inset-y-0 start-0 z-50 w-[var(--dd-sidebar-width)] bg-frame text-text overflow-y-auto flex flex-col">
+
+                <!-- Logo -->
+                <div class="dd-logo-bar flex items-center h-[var(--dd-topbar-height)] px-4 flex-shrink-0">
+                    {% block header_logo %}
+                        <a href="{% url 'home' %}" class="flex items-center min-w-0">
+                            <img src="{% static "dojo/img/logo.svg" %}" alt="{% trans 'DefectDojo' %}" class="h-5 w-auto max-w-full">
+                        </a>
+                    {% endblock %}
+                </div>
+
+                <!-- Nav items -->
+                <nav class="flex-1 py-3 space-y-0.5" aria-label="{% trans 'Main navigation' %}">
+                    {% block sidebar-items %}
+                    <!-- Dashboard -->
+                    <a href="{% url 'dashboard' %}" class="flex items-center gap-3 px-4 py-2 transition-colors">
+                        <i class="fa-solid fa-gauge w-5 text-center flex-shrink-0"></i>
+                        <span class="truncate">{% trans "Dashboard" %}</span>
+                    </a>
+
+                    <!-- Products -->
+                    <div x-data="{ open: false }">
+                        <a href="{% url 'product' %}" @click.prevent="open = !open"
+                           class="flex items-center gap-3 px-4 py-2 transition-colors cursor-pointer">
+                            <i class="fa-solid fa-list-ul w-5 text-center flex-shrink-0"></i>
+                            <span class="flex-1 truncate">{{ labels.ASSET_PLURAL_LABEL }}</span>
+                            <i :class="open && 'rotate-90'" class="fa-solid fa-chevron-right text-xs transition-transform duration-200"></i>
+                        </a>
+                        <div x-show="open" x-transition.duration.200ms x-cloak class="overflow-hidden">
+                            <a href="{% url 'product' %}" class="block py-1.5 ps-12 pe-4 text-sm">{{ labels.ASSET_ALL_LABEL }}</a>
+                            {% if request.user|can_add_product %}
+                                <a href="{% url 'new_product' %}" class="block py-1.5 ps-12 pe-4 text-sm">{{ labels.ASSET_CREATE_LABEL }}</a>
+                            {% endif %}
+                            <a href="{% url 'product_type' %}" class="block py-1.5 ps-12 pe-4 text-sm">{{ labels.ORG_ALL_LABEL }}</a>
+                            {% if "add"|has_global_permission %}
+                                <a href="{% url 'add_product_type' %}" class="block py-1.5 ps-12 pe-4 text-sm">{{ labels.ORG_CREATE_LABEL }}</a>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <!-- Engagements -->
+                    <div x-data="{ open: false }">
+                        <a href="{% url 'engagement' %}" @click.prevent="open = !open"
+                           class="flex items-center gap-3 px-4 py-2 transition-colors cursor-pointer">
+                            <i class="fa-solid fa-inbox w-5 text-center flex-shrink-0"></i>
+                            <span class="flex-1 truncate">{% trans "Engagements" %}</span>
+                            <i :class="open && 'rotate-90'" class="fa-solid fa-chevron-right text-xs transition-transform duration-200"></i>
+                        </a>
+                        <div x-show="open" x-transition.duration.200ms x-cloak class="overflow-hidden">
+                            <a href="{% url 'active_engagements' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "Active Engagements" %}</a>
+                            <a href="{% url 'all_engagements' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "All Engagements" %}</a>
+                            <a href="{% url 'engagements_all' %}" class="block py-1.5 ps-12 pe-4 text-sm">{{ labels.ASSET_ENGAGEMENTS_BY_LABEL }}</a>
+                            <a href="{% url 'test_type' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "Test Types" %}</a>
+                            <a href="{% url 'dev_env' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "Environments" %}</a>
+                        </div>
+                    </div>
+
+                    <!-- Findings (Finding Groups folded in) -->
+                    <div x-data="{ open: false }">
+                        <a href="{% url 'open_findings' %}" @click.prevent="open = !open"
+                           class="flex items-center gap-3 px-4 py-2 transition-colors cursor-pointer">
+                            <i class="fa-solid fa-bug w-5 text-center flex-shrink-0"></i>
+                            <span class="flex-1 truncate">{% trans "Findings" %}</span>
+                            <i :class="open && 'rotate-90'" class="fa-solid fa-chevron-right text-xs transition-transform duration-200"></i>
+                        </a>
+                        <div x-show="open" x-transition.duration.200ms x-cloak class="overflow-hidden">
+                            <a href="{% url 'open_findings' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "Open Findings" %}</a>
+                            <a href="{% url 'all_findings' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "All Findings" %}</a>
+                            <a href="{% url 'closed_findings' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "Closed Findings" %}</a>
+                            <a href="{% url 'accepted_findings' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "Risk Accepted Findings" %}</a>
+                            {% if "view"|has_global_permission %}
+                                <a href="{% url 'templates' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "Finding Templates" %}</a>
+                            {% endif %}
+                            <div style="margin:.25rem 1rem; border-top:1px solid rgba(255,255,255,0.1);"></div>
+                            <a href="{% url 'open_finding_groups' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "Open Findings Groups" %}</a>
+                            <a href="{% url 'all_finding_groups' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "All Findings Groups" %}</a>
+                            <a href="{% url 'closed_finding_groups' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "Closed Findings Groups" %}</a>
+                        </div>
+                    </div>
+
+                    <!-- Components -->
+                    <a href="{% url 'components' %}" id="product_component_view" class="flex items-center gap-3 px-4 py-2 transition-colors">
+                        <i class="fa-solid fa-table-cells-large w-5 text-center flex-shrink-0"></i>
+                        <span class="truncate">{% trans "Components" %}</span>
+                    </a>
+
+                    <!-- Endpoints -->
+                    <div x-data="{ open: false }">
+                        <a href="{% url 'endpoint' %}" @click.prevent="open = !open"
+                           class="flex items-center gap-3 px-4 py-2 transition-colors cursor-pointer">
+                            <i class="fa-solid fa-sitemap w-5 text-center flex-shrink-0"></i>
+                            <span class="flex-1 truncate">{% trans "Endpoints" %}</span>
+                            <i :class="open && 'rotate-90'" class="fa-solid fa-chevron-right text-xs transition-transform duration-200"></i>
+                        </a>
+                        <div x-show="open" x-transition.duration.200ms x-cloak class="overflow-hidden">
+                            <a href="{% url 'endpoint' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "All Endpoints" %}</a>
+                            <a href="{% url 'endpoint_host' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "All Hosts" %}</a>
+                            <a href="{% url 'vulnerable_endpoints' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "Vulnerable Endpoints" %}</a>
+                            <a href="{% url 'vulnerable_endpoint_hosts' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "Vulnerable Hosts" %}</a>
+                            {% if request.user.is_superuser %}
+                                <a href="{% url 'endpoint_migrate' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "Migrate Endpoints" %}</a>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <!-- Reports -->
+                    {% block reports_tab %}
+                    <div x-data="{ open: false }">
+                        <a href="{% url 'report_builder' %}" @click.prevent="open = !open"
+                           class="flex items-center gap-3 px-4 py-2 transition-colors cursor-pointer">
+                            <i class="fa-solid fa-file-lines w-5 text-center flex-shrink-0"></i>
+                            <span class="flex-1 truncate">{% trans "Reports" %}</span>
+                            <i :class="open && 'rotate-90'" class="fa-solid fa-chevron-right text-xs transition-transform duration-200"></i>
+                        </a>
+                        <div x-show="open" x-transition.duration.200ms x-cloak class="overflow-hidden">
+                            <a href="{% url 'report_builder' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "Report Builder" %}</a>
+                        </div>
+                    </div>
+                    {% endblock %}
+
+                    <!-- Metrics -->
+                    <div x-data="{ open: false }">
+                        <a href="{% url 'metrics' %}?date=5&view=dashboard" @click.prevent="open = !open"
+                           class="flex items-center gap-3 px-4 py-2 transition-colors cursor-pointer">
+                            <i class="fa-solid fa-chart-column w-5 text-center flex-shrink-0"></i>
+                            <span class="flex-1 truncate">{% trans "Metrics" %}</span>
+                            <i :class="open && 'rotate-90'" class="fa-solid fa-chevron-right text-xs transition-transform duration-200"></i>
+                        </a>
+                        <div x-show="open" x-transition.duration.200ms x-cloak class="overflow-hidden">
+                            <a href="{% url 'metrics' %}?date=5&view=dashboard" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "Metrics Dashboard" %}</a>
+                            <a href="{% url 'critical_product_metrics' %}" class="block py-1.5 ps-12 pe-4 text-sm">{{ labels.ASSET_METRICS_CRITICAL_LABEL }}</a>
+                            <a href="{% url 'metrics_product_type' %}" class="block py-1.5 ps-12 pe-4 text-sm">{{ labels.ORG_METRICS_LABEL }}</a>
+                            <a href="{% url 'product_type_counts' %}" class="block py-1.5 ps-12 pe-4 text-sm">{{ labels.ORG_METRICS_COUNTS_LABEL }}</a>
+                            <a href="{% url 'product_tag_counts' %}" class="block py-1.5 ps-12 pe-4 text-sm">{{ labels.ASSET_METRICS_TAG_COUNTS_LABEL }}</a>
+                            <a href="{% url 'simple_metrics' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "Simple Metrics" %}</a>
+                            <a href="{% url 'engineer_metrics' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "Engineer Metrics" %}</a>
+                        </div>
+                    </div>
+
+                    <!-- Users -->
+                    {% if "auth.view_user"|has_configuration_permission:request %}
+                    <div x-data="{ open: false }">
+                        <a href="{% url 'users' %}" @click.prevent="open = !open" id="id_user_menu"
+                           class="flex items-center gap-3 px-4 py-2 transition-colors cursor-pointer">
+                            <i class="fa-solid fa-user w-5 text-center flex-shrink-0"></i>
+                            <span class="flex-1 truncate">{% trans "Users" %}</span>
+                            <i :class="open && 'rotate-90'" class="fa-solid fa-chevron-right text-xs transition-transform duration-200"></i>
+                        </a>
+                        <div x-show="open" x-transition.duration.200ms x-cloak class="overflow-hidden">
+                            {% if "auth.view_user"|has_configuration_permission:request %}
+                                <a href="{% url 'users' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "Users" %}</a>
+                            {% endif %}
+                            {# Pro restores the Groups link by overriding this block. #}
+                            {% block groups_submenu_link %}{% endblock %}
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <!-- Calendar -->
+                    {% if system_settings.enable_calendar %}
+                    <a href="{% url 'engagement_calendar' %}" class="flex items-center gap-3 px-4 py-2 transition-colors">
+                        <i class="fa-solid fa-calendar-days w-5 text-center flex-shrink-0"></i>
+                        <span class="truncate">{% trans "Calendar" %}</span>
+                    </a>
+                    {% endif %}
+
+                    <!-- Questionnaires -->
+                    {% if system_settings.enable_questionnaires %}
+                        {% if "dojo.view_engagement_survey"|has_configuration_permission:request or "dojo.view_question"|has_configuration_permission:request %}
+                        <div x-data="{ open: false }">
+                            <a href="#" @click.prevent="open = !open"
+                               class="flex items-center gap-3 px-4 py-2 transition-colors cursor-pointer">
+                                <i class="fa-solid fa-house-medical-flag w-5 text-center flex-shrink-0"></i>
+                                <span class="flex-1 truncate">{% trans "Questionnaires" %}</span>
+                                <i :class="open && 'rotate-90'" class="fa-solid fa-chevron-right text-xs transition-transform duration-200"></i>
+                            </a>
+                            <div x-show="open" x-transition.duration.200ms x-cloak class="overflow-hidden">
+                                {% if "dojo.view_engagement_survey"|has_configuration_permission:request %}
+                                    <a href="{% url 'questionnaire' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "All Questionnaires" %}</a>
+                                {% endif %}
+                                {% if "dojo.view_question"|has_configuration_permission:request %}
+                                    <a href="{% url 'questions' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "All Questions" %}</a>
+                                {% endif %}
+                            </div>
+                        </div>
+                        {% endif %}
+                    {% endif %}
+
+                    <!-- Configuration -->
+                    <div x-data="{ open: false }">
+                        <a href="#" @click.prevent="open = !open" id="menu_configuration"
+                           class="flex items-center gap-3 px-4 py-2 transition-colors cursor-pointer">
+                            <i class="fa-solid fa-gear w-5 text-center flex-shrink-0"></i>
+                            <span class="flex-1 truncate">{% trans "Configuration" %}</span>
+                            <i :class="open && 'rotate-90'" class="fa-solid fa-chevron-right text-xs transition-transform duration-200"></i>
+                        </a>
+                        <div x-show="open" x-transition.duration.200ms x-cloak class="overflow-hidden">
+                            {% if "dojo.change_announcement"|has_configuration_permission:request %}
+                                <a href="{% url 'configure_announcement' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "Announcement" %}</a>
+                            {% endif %}
+                            {% if system_settings.enable_github and "dojo.view_github_conf"|has_configuration_permission:request %}
+                                <a href="{% url 'github' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "GitHub" %}</a>
+                            {% endif %}
+                            {% if system_settings.enable_jira and "dojo.view_jira_instance"|has_configuration_permission:request %}
+                                <a href="{% url 'jira' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "JIRA" %}</a>
+                            {% endif %}
+                            {% if "dojo.change_bannerconf"|has_configuration_permission:request %}
+                                <a href="{% url 'configure_banner' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "Login Banner" %}</a>
+                            {% endif %}
+                            {% if "dojo.view_note_type"|has_configuration_permission:request %}
+                                <a href="{% url 'note_type' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "Note Types" %}</a>
+                            {% endif %}
+                            <a href="{% url 'notifications' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "Notifications" %}</a>
+                            {% if system_settings.enable_webhooks_notifications and "dojo.view_notification_webhooks"|has_configuration_permission:request %}
+                                <a href="{% url 'notification_webhooks' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "Notification Webhooks" %}</a>
+                            {% endif %}
+                            <a href="{% url 'regulations' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "Regulations" %}</a>
+                            {% if system_settings.enable_finding_sla and "dojo.view_sla_configuration"|has_configuration_permission:request %}
+                                <a href="{% url 'sla_config' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "SLA Configuration" %}</a>
+                            {% endif %}
+                            {% if request.user.is_superuser %}
+                                <a href="{% url 'system_settings' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "System Settings" %}</a>
+                                <a href="{% url 'celery_status' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "Celery Status" %}</a>
+                            {% endif %}
+                            {% if "dojo.view_tool_configuration"|has_configuration_permission:request %}
+                                <a href="{% url 'tool_config' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "Tool Configuration" %}</a>
+                            {% endif %}
+                            {% if "dojo.view_tool_type"|has_configuration_permission:request %}
+                                <a href="{% url 'tool_type' %}" class="block py-1.5 ps-12 pe-4 text-sm">{% trans "Tool Type" %}</a>
+                            {% endif %}
+                            {% if "dojo.view_cicdinfrastructure"|has_configuration_permission:request %}
+                                <a href="{% url 'cicd_infrastructure' %}" class="block py-1.5 pl-12 pr-4 text-sm">{% trans "CI/CD Infrastructure" %}</a>
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    {% endblock sidebar-items %}
+
+                    {% block support-tab %}
+                    <a href="{% url 'support' %}" class="flex items-center gap-3 px-4 py-2 transition-colors">
+                        <i class="fa-solid fa-level-up w-5 text-center flex-shrink-0"></i>
+                        <span class="truncate">{% trans "Upgrade" %}</span>
+                    </a>
+                    {% endblock %}
+                </nav>
+            </aside>
+        {% endif %}
+        {% endblock navigation %}
+
+        <!-- ===== Main wrapper ===== -->
+        <div id="wrapper"
+             {% if request.user.is_authenticated %}
+             class="min-h-screen flex flex-col ps-[var(--dd-sidebar-width)]"
+             {% else %}
+             class="min-h-screen flex flex-col"
+             {% endif %}>
+
+            {% if request.user.is_authenticated %}
+            <!-- ===== Topbar ===== -->
+            <header class="sticky top-0 z-30 bg-frame border-b border-border h-[var(--dd-topbar-height)] flex items-center px-4 gap-4 flex-shrink-0">
+                <!-- Search -->
+                <form id="custom_search_form" method="get" action="{% url 'simple_search' %}" class="ms-auto w-full max-w-md">
+                    <div class="flex">
+                        <input id="simple_search" type="text" name="query" value="{{ clean_query }}"
+                               class="flex-1 rounded-s-md border border-e-0 border-gray-300 px-3 py-1.5 text-sm bg-white focus:border-dd-interactive-700 focus:ring-dd-interactive-700"
+                               placeholder="{% trans "Search" %}..." aria-label="{% trans 'Search' %}">
+                        <button id="simple_search_submit" type="submit" class="btn btn-primary rounded-s-none" aria-label="{% trans 'Search' %}">
+                            <i class="fa-solid fa-magnifying-glass"></i>
+                        </button>
+                    </div>
+                </form>
+
+                <div class="flex items-center gap-2">
+                    <!-- Alerts dropdown -->
+                    {% if not 'DISABLE_ALERT_COUNTER'|setting_enabled %}
+                    <div x-data="{ alertsOpen: false }" class="relative">
+                        <button @click="alertsOpen = !alertsOpen; if(alertsOpen) htmx.trigger('#alerts-dropdown', 'loadAlerts')"
+                                :aria-expanded="alertsOpen" aria-controls="alerts-dropdown"
+                                class="relative p-2 text-gray-500 hover:text-gray-700 transition-colors"
+                                aria-label="{% trans 'Alerts' %}">
+                            <i class="fa-solid fa-bell"></i>
+                            <span id="alert_count"
+                                  {% if 'ALERT_REFRESH'|setting_enabled %}
+                                  hx-get="{% url 'alertcount_text' %}" hx-trigger="load, every 10s" hx-swap="innerHTML"
+                                  {% else %}
+                                  hx-get="{% url 'alertcount_text' %}" hx-trigger="load" hx-swap="innerHTML"
+                                  {% endif %}
+                                  class="absolute -top-0.5 -end-0.5 inline-flex items-center justify-center rounded-full text-xs font-bold w-5 h-5 {% if alert_count %}bg-red-700 text-white{% else %}bg-green-700 text-white{% endif %}">{{ alert_count }}</span>
+                        </button>
+                        <div id="alerts-dropdown"
+                             x-show="alertsOpen" x-transition
+                             @click.outside="alertsOpen = false"
+                             role="menu" aria-label="{% trans 'Alerts' %}"
+                             hx-get="{% url 'alerts_partial' %}?limit=12"
+                             hx-trigger="loadAlerts"
+                             hx-swap="innerHTML"
+                             class="absolute end-0 mt-2 w-80 bg-white rounded-lg shadow-lg border border-gray-200 z-50 max-h-96 overflow-y-auto"
+                             x-cloak>
+                            <div class="text-center py-4 text-gray-400"><i class="fa-solid fa-spinner fa-spin"></i></div>
+                        </div>
+                    </div>
+                    {% endif %}
+
+                    <!-- User dropdown -->
+                    <div x-data="{ userOpen: false }" class="relative">
+                        <button @click="userOpen = !userOpen"
+                                :aria-expanded="userOpen" aria-controls="user-dropdown"
+                                class="flex items-center gap-1 p-2 text-gray-500 hover:text-gray-700 transition-colors"
+                                aria-label="{% trans 'User Menu' %}">
+                            <i class="fa-solid fa-user"></i>
+                            <i class="fa-solid fa-caret-down text-xs"></i>
+                        </button>
+                        <div id="user-dropdown" x-show="userOpen" x-transition
+                             @click.outside="userOpen = false"
+                             role="menu"
+                             class="absolute end-0 mt-2 w-56 bg-white rounded-lg shadow-lg border border-gray-200 z-50 py-1"
+                             x-cloak>
+                            {% block settings-dropdown-items %}
+                                {% if request.user.is_authenticated %}
+                                    <a href="{% url 'view_profile' %}" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                                        <i class="fa-solid fa-user fa-fw"></i> {{ request.user.username }}
+                                    </a>
+                                    {% if API_TOKENS_ENABLED %}
+                                        <a href="{% url 'api_v2_key' %}" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                                            <i class="fa-solid fa-key fa-fw"></i> {% trans "API v2 Key" %}
+                                        </a>
+                                    {% endif %}
+                                {% endif %}
+                                <a href="{% url 'swagger-ui_oa3' %}" target="_blank" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                                    <i class="fa-solid fa-book fa-fw"></i> {% trans "API v2 Docs" %}
+                                </a>
+                                {% if V3_FEATURE_LOCATIONS %}
+                                    {# v3 mounts conditionally on this flag (D5) — an unguarded url tag would break every page when it is off #}
+                                    <a href="{% url 'api_v3:openapi-view' %}" target="_blank" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                                        <i class="fa-solid fa-book fa-fw"></i> {% trans "Open API v3 alpha Docs (Swagger)" %}
+                                    </a>
+                                    <a href="{% url 'api_v3_reference' %}" target="_blank" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                                        <i class="fa-solid fa-book fa-fw"></i> {% trans "Open API v3 alpha Docs (Scalar)" %}
+                                    </a>
+                                {% endif %}
+                                <a href="{{ DOCUMENTATION_URL }}" target="_blank" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                                    <i class="fa-solid fa-circle-question fa-fw"></i> {% trans "Documentation" %}
+                                </a>
+                            {% endblock %}
+                            {% if request.user.is_authenticated %}
+                                <div class="border-t border-gray-200 my-1"></div>
+                                {% if SHOW_PLG_LINK %}
+                                    <a href="https://cloud.defectdojo.com/onboarding?payg=1" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                                        <i class="fa-solid fa-level-up fa-fw"></i> {% trans "Get Pro from $100/mo" %}
+                                    </a>
+                                {% endif %}
+                                <a href="{% url 'logout' %}" class="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">
+                                    <i class="fa-solid fa-right-from-bracket fa-fw"></i> {% trans "Logout" %}
+                                </a>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </header>
+            {% endif %}
+
+            <!-- ===== Page Content ===== -->
+            <div id="page-wrapper" class="flex-1">
+                {% if request.user.is_authenticated and announcement %}
+                    <div role="alert" class="announcement-banner alert alert-{{ announcement.style }} {% if announcement.dismissable %}alert-dismissible{% endif %} show">
+                    {% if announcement.dismissable %}
+                        <a href="{% url 'dismiss_announcement' %}" class="close" aria-label="{% trans 'Close' %}">
+                            <span aria-hidden="true">&times;</span>
+                        </a>
+                    {% endif %}
+                    {{ announcement.message|bleach_with_a_tags }}
+                    </div>
+                {% endif %}
+                {% for banner in additional_banners %}
+                    <div role="alert" class="announcement-banner alert alert-{{ banner.style }} show"
+                         data-source="{{ banner.source }}">
+                        {% if banner.dismissible %}
+                            <form method="post" action="{% url 'dismiss_os_message' %}" class="os-message-dismiss-form">
+                                {% csrf_token %}
+                                <input type="hidden" name="token" value="{{ banner.dismiss_token }}">
+                                <button type="submit" class="os-message-dismiss" aria-label="{% trans 'Dismiss' %}" title="{% trans 'Dismiss this message' %}">&times;</button>
+                            </form>
+                        {% endif %}
+                        {{ banner.message|safe }}{% if banner.url %} <a href="{{ banner.url }}">{{ banner.link_text }}</a>{% endif %}
+                        {% if banner.expanded_html %}
+                            <button type="button" class="banner-toggle collapsed"
+                                    data-toggle="collapse"
+                                    data-target="#banner-expanded-{{ forloop.counter }}"
+                                    aria-expanded="false"
+                                    aria-controls="banner-expanded-{{ forloop.counter }}">
+                                <i class="fa-solid fa-caret-down"></i>
+                            </button>
+                            <div id="banner-expanded-{{ forloop.counter }}" class="collapse banner-expanded">
+                                {{ banner.expanded_html|safe }}
+                            </div>
+                        {% endif %}
+                    </div>
+                {% endfor %}
+                <div class="container-fluid">
+                    <!-- start of tabs -->
+                    {% block tab_bar %}
+                        {% if product_tab.tab %}
+                            <div class="row">
+                                <div class="col-md-12">
+                                    <h3 class="no-margin-top" style="padding-bottom: 5px;">
+                                        {{ product_tab.product }}
+                                        {% if system_settings.enable_benchmark == 9 %}
+                                            {% for benchmark in tab_benchmarks%}
+                                                <sup><span class="fa-solid fa-bookmark has-popover" data-trigger="hover" data-content="{{ benchmark|asvs_level }}"></span>
+                                                {{ benchmark.desired_level }}</sup>
+                                            {% endfor %}
+                                        {% endif %}
+                                        {% with grade=product_tab.product|product_grade %}
+                                            {% if grade %}
+                                                <sup><div class="tag-label {{ grade }}">{{ grade }}</div></sup>
+                                            {% endif %}
+                                        {% endwith %}
+                                        {% include "dojo/snippets/tags.html" with tags=product_tab.product.tags.all.all %}
+                                    </h3>
+                                    <ul class="nav nav-tabs horizontal-bar in">
+                                        <li role="presentation"{% if product_tab.tab == 'overview' %} class="active"{% endif %}>
+                                            <a href="{% url 'view_product' product_tab.product.id %}" data-testid="product-tab-overview">
+                                                <span class="fa-solid fa-earth-americas" aria-hidden="true"></span>
+                                                <span class="hidden-xs">{% trans "Overview" %}</span>
+                                            </a>
+                                        </li>
+                                        <li role="presentation"{% if product_tab.tab == 'components' %} class="active"{% endif %}>
+                                            <a href="{% url 'view_product_components' product_tab.product.id %}" data-testid="product-tab-components">
+                                                <span class="fa-solid fa-table-cells-large" aria-hidden="true"></span>
+                                                <span class="hidden-xs">{% trans "Components" %}</span>
+                                            </a>
+                                        </li>
+                                        <li role="presentation"{% if product_tab.tab == 'metrics' %} class="active"{% endif %}>
+                                            <a href="{% url 'view_product_metrics' product_tab.product.id %}" data-testid="product-tab-metrics">
+                                                <span class="fa-solid fa-chart-column" aria-hidden="true"></span>
+                                                <span class="hidden-xs">{% trans "Metrics" %}</span>
+                                            </a>
+                                        </li>
+                                        <!-- Engagements Tab -->
+                                        <li role="presentation" class="dropdown{% if product_tab.tab == 'engagements' %} active active-color{% endif %}">
+                                            <a class="dropdown-toggle" data-toggle="dropdown" href="" data-testid="product-tab-engagements">
+                                                <span class="fa-solid fa-calendar-days" aria-hidden="true"></span>
+                                                <span class="hidden-xs">{% trans "Engagements" %}
+                                                    {% if product_tab.engagements > 0 %}
+                                                        <span class="badge">{{ product_tab.engagements }}</span>
+                                                    {% endif %}
+                                                </span>
+                                                <span class="caret"></span>
+                                            </a>
+                                            <ul class="dropdown-menu">
+                                                <li>
+                                                    <a href="{% url 'view_engagements' product_tab.product.id %}">
+                                                        <i class="fa-solid fa-calendar-days"></i>
+                                                        {% trans "View Engagements" %}
+                                                    </a>
+                                                </li>
+                                                {% if product_tab.product|has_object_permission:"add" %}
+                                                    <li role="separator" class="divider"></li>
+                                                    <li>
+                                                        <a href="{% url 'new_eng_for_prod' product_tab.product.id %}">
+                                                            <i class="fa-solid fa-plus"></i>
+                                                            {% trans "Add New Interactive Engagement" %}
+                                                        </a>
+                                                    </li>
+                                                    <li>
+                                                        <a href="{% url 'new_eng_for_prod_cicd' product_tab.product.id %}">
+                                                            <i class="fa-solid fa-plus"></i>
+                                                            {% trans "Add New CI/CD Engagement" %}
+                                                        </a>
+                                                    </li>
+                                                {% endif %}
+                                            </ul>
+                                        </li>
+                                        <!-- Findings Tab -->
+                                        <li role="presentation" class="dropdown{% if product_tab.tab == 'findings' %} active active-color{% endif %}">
+                                            <a class="dropdown-toggle" data-toggle="dropdown" href="" data-testid="product-tab-findings">
+                                                <span class="fa-solid fa-bug" aria-hidden="true"></span>
+                                                <span class="hidden-xs">
+                                                    {% trans "Findings" %}
+                                                    {% if product_tab.findings > 0 %}
+                                                        <span class="badge">{{ product_tab.findings }}</span>
+                                                    {% endif %}
+                                                </span>
+                                                <span class="caret"></span>
+                                            </a>
+                                            <ul class="dropdown-menu">
+                                                <li>
+                                                    <a href="{% url 'product_open_findings' product_tab.product.id %}">
+                                                        <i class="fa-solid fa-rectangle-list"></i>
+                                                        {% trans "View Active Findings" %}
+                                                    </a>
+                                                </li>
+                                                <li>
+                                                    <a href="{% url 'product_open_findings' product_tab.product.id %}?verified=true">
+                                                        <i class="fa-solid fa-rectangle-list"></i>
+                                                        {% trans "View Active Verified Findings" %}
+                                                    </a>
+                                                </li>
+                                                <li>
+                                                    <a href="{% url 'product_open_findings' product_tab.product.id %}?severity=Critical">
+                                                        <i class="fa-solid fa-triangle-exclamation"></i>
+                                                        {% trans "View Critical Findings" %}
+                                                    </a>
+                                                </li>
+                                                <li>
+                                                    <a href="{% url 'product_open_findings' product_tab.product.id %}?date=2">
+                                                        <i class="fa-solid fa-calendar-days"></i>
+                                                        {% trans "View Findings from Last 7 Days" %}
+                                                    </a>
+                                                </li>
+                                                <li role="separator" class="divider"></li>
+                                                <li>
+                                                    <a href="{% url 'product_accepted_findings' product_tab.product.id %}">
+                                                        <i class="fa-solid fa-check"></i>
+                                                        {% trans "View Risk Accepted Findings" %}
+                                                    </a>
+                                                </li>
+                                                <li>
+                                                    <a href="{% url 'product_all_findings' product_tab.product.id %}">
+                                                        <i class="fa-solid fa-magnifying-glass"></i>
+                                                        {% trans "View All Findings" %}
+                                                    </a>
+                                                </li>
+                                                <li>
+                                                    <a href="{% url 'product_closed_findings' product_tab.product.id %}">
+                                                        <i class="fa-solid fa-fire-extinguisher"></i>
+                                                        {% trans "View Closed Findings" %}
+                                                    </a>
+                                                </li>
+                                                {% if product_tab.product|has_object_permission:"add" %}
+                                                    <li role="separator" class="divider"></li>
+                                                    <li>
+                                                        <a href="{% url 'ad_hoc_finding' product_tab.product.id %}">
+                                                            <i class="fa-solid fa-plus"></i>
+                                                            {% trans "Add New Finding" %}
+                                                        </a>
+                                                    </li>
+                                                {% endif %}
+                                                {% if product_tab.product|has_object_permission:"import" %}
+                                                    <li>
+                                                        <a href="{% url 'import_scan_results_prod' product_tab.product.id %}">
+                                                            <i class="fa-solid fa-upload"></i>
+                                                            {% trans "Import Scan Results" %}
+                                                        </a>
+                                                    </li>
+                                                {% endif %}
+                                            </ul>
+                                        </li>
+                                        <!-- Endpoints Tab -->
+                                        <li role="presentation" class="dropdown{% if product_tab.tab == 'endpoints' %} active active-color{% endif %}">
+                                            <a class="dropdown-toggle" data-toggle="dropdown" href="" data-testid="product-tab-endpoints">
+                                                <span class="fa-solid fa-sitemap" aria-hidden="true"></span>
+                                                <span class="hidden-xs">
+                                                    {% trans "Hosts / Endpoints" %}
+                                                    <span class="badge">{{ product_tab.endpoint_hosts }} / {{ product_tab.endpoints }}</span>
+                                                </span>
+                                                <span class="caret"></span>
+                                            </a>
+                                            <ul class="dropdown-menu">
+                                                <li>
+                                                    <a href="{% url 'endpoint' %}?product={{ product_tab.product.id }}">
+                                                        <i class="fa-solid fa-rectangle-list"></i>
+                                                        {% trans "View Endpoints" %}
+                                                    </a>
+                                                </li>
+                                                <li>
+                                                    <a href="{% url 'endpoint_host' %}?product={{ product_tab.product.id }}">
+                                                        <i class="fa-solid fa-rectangle-list"></i>
+                                                        {% trans "View Hosts" %}
+                                                    </a>
+                                                </li>
+                                                <li>
+                                                    <a href="{% url 'vulnerable_endpoints' %}?product={{ product_tab.product.id }}">
+                                                        <i class="fa-solid fa-sitemap"></i>
+                                                        {% trans "View Vulnerable Endpoints" %}
+                                                    </a>
+                                                </li>
+                                                <li>
+                                                    <a href="{% url 'vulnerable_endpoint_hosts' %}?product={{ product_tab.product.id }}">
+                                                        <i class="fa-solid fa-sitemap"></i>
+                                                        {% trans "View Vulnerable Hosts" %}
+                                                    </a>
+                                                </li>
+                                                <li role="separator" class="divider"></li>
+                                                <li>
+                                                    <a href="{% url 'product_endpoint_report' product_tab.product.id %}">
+                                                        <i class="fa-solid fa-file-lines"></i>
+                                                        {% trans "Endpoint Report" %}
+                                                    </a>
+                                                </li>
+                                                {% if product_tab.product|has_object_permission:"add" %}
+                                                    <li role="separator" class="divider"></li>
+                                                    <li>
+                                                        <a href="{% url 'add_endpoint' product_tab.product.id %}">
+                                                            <i class="fa-solid fa-plus"></i>
+                                                            {% trans "Add New Endpoint" %}
+                                                        </a>
+                                                    </li>
+                                                {% endif %}
+                                                {% if product_tab.product|has_object_permission:"edit" and system_settings.enable_endpoint_metadata_import %}
+                                                    <li>
+                                                        <a href="{% url 'import_endpoint_meta' product_tab.product.id %}">
+                                                            <i class="fa-solid fa-upload"></i>
+                                                            {% trans "Import Endpoint Meta" %}
+                                                        </a>
+                                                    </li>
+                                                {% endif %}
+                                            </ul>
+                                        </li>
+                                        <!-- Benchmarks Tab -->
+                                        {% if system_settings.enable_benchmark %}
+                                            {% if product_tab.product|has_object_permission:"edit" %}
+                                                <li role="presentation" class="dropdown{% if product_tab.tab == 'benchmarks' %} active{% endif %}">
+                                                    <a class="dropdown-toggle" data-toggle="dropdown" href="" data-testid="product-tab-benchmarks">
+                                                        <span class="fa-solid fa-scale-balanced" aria-hidden="true"></span>
+                                                        <span class="hidden-xs">{% trans "Benchmarks" %}</span>
+                                                        <span class="caret"></span>
+                                                    </a>
+                                                    <ul class="dropdown-menu">
+                                                        {% for bt in product_tab.benchmark_type %}
+                                                            <a title="{{ bt.name }}" href="{% url 'view_product_benchmark' product_tab.product.id bt.id %}">
+                                                                <li>
+                                                                    <span class="fa-solid fa-list-ul"></span>
+                                                                    {{ bt.name }} {{ bt.version }}
+                                                                </a>
+                                                            </li>
+                                                        {% endfor %}
+                                                    </ul>
+                                                </li>
+                                            {% endif %}
+                                        {% endif %}
+                                        <!-- Product Settings Tab -->
+                                        {% if product_tab.product|has_object_permission:"edit" or product_tab.product|has_object_permission:"delete" %}
+                                            <li role="presentation" class="dropdown{% if product_tab.tab == 'settings' %} active{% endif %}">
+                                                <a class="dropdown-toggle" data-toggle="dropdown" href="" data-testid="product-tab-settings">
+                                                    <span class="fa-solid fa-gears" aria-hidden="true"></span>
+                                                    <span class="hidden-xs">{% trans "Settings" %}</span>
+                                                    <span class="caret"></span></a>
+                                                <ul class="dropdown-menu">
+                                                    {% if product_tab.product|has_object_permission:"edit" %}
+                                                        <li role="presentation">
+                                                            <a href="{% url 'edit_product' product_tab.product.id %}">
+                                                                <i class="fa-solid fa-pen-to-square"></i>
+                                                                {% trans "Edit" %}
+                                                            </a>
+                                                        </li>
+                                                        <li role="separator" class="divider"></li>
+                                                        <li role="presentation">
+                                                            <a href="{% url 'add_meta_data' product_tab.product.id %}">
+                                                                <i class="fa-solid fa-plus"></i>
+                                                                {% trans "Add Custom Fields" %}
+                                                            </a>
+                                                        </li>
+                                                        <li role="presentation">
+                                                            <a href="{% url 'edit_meta_data' product_tab.product.id %}">
+                                                                <i class="fa-solid fa-pen-to-square"></i>
+                                                                {% trans "Edit Custom Fields" %}
+                                                            </a>
+                                                        </li>
+                                                        <li role="separator" class="divider"></li>
+                                                        <li role="presentation">
+                                                            <a href="{% url 'add_api_scan_configuration' product_tab.product.id %}">
+                                                                <i class="fa-solid fa-plus"></i>
+                                                                {% trans "Add API Scan Configuration" %}
+                                                            </a>
+                                                        </li>
+                                                        <li role="presentation">
+                                                            <a href="{% url 'view_api_scan_configurations' product_tab.product.id %}">
+                                                                <i class="fa-solid fa-rectangle-list"></i>
+                                                                {% trans "View API Scan Configurations" %}
+                                                            </a>
+                                                        </li>
+                                                        {% if system_settings.enable_product_tracking_files %}
+                                                            <li role="separator" class="divider"></li>
+                                                            <li role="presentation">
+                                                                <a href="{% url 'new_object' product_tab.product.id %}">
+                                                                    <i class="fa-solid fa-plus"></i>
+                                                                    {% trans "Add Tracked File" %}
+                                                                </a>
+                                                            </li>
+                                                            <li role="presentation">
+                                                                <a href="{% url 'view_objects' product_tab.product.id %}">
+                                                                    <i class="fa-solid fa-rectangle-list"></i>
+                                                                    {% trans "View Tracked Files" %}
+                                                                </a>
+                                                            </li>
+                                                        {% endif %}
+                                                        <li role="separator" class="divider"></li>
+                                                        <li role="presentation">
+                                                            <a href="{% url 'new_tool_product' product_tab.product.id %}">
+                                                                <i class="fa-solid fa-plus"></i>
+                                                                {% trans "Add Tools" %}
+                                                            </a>
+                                                        </li>
+                                                        <li role="presentation">
+                                                            <a href="{% url 'all_tool_product' product_tab.product.id %}">
+                                                                <i class="fa-solid fa-rectangle-list"></i>
+                                                                {% trans "View Tools" %}
+                                                            </a>
+                                                        </li>
+                                                        <li role="separator" class="divider"></li>
+                                                        <li role="presentation">
+                                                            <a href="{% url 'add_engagement_presets' product_tab.product.id %}">
+                                                                <i class="fa-solid fa-plus"></i>
+                                                                {% trans "Add Engagement Presets" %}
+                                                            </a>
+                                                        </li>
+                                                        <li role="presentation">
+                                                            <a href="{% url 'engagement_presets' product_tab.product.id %}">
+                                                                <i class="fa-solid fa-rectangle-list"></i>
+                                                                {% trans "View Engagement Presets" %}
+                                                            </a>
+                                                        </li>
+                                                        <li role="separator" class="divider"></li>
+                                                        <li role="presentation">
+                                                            <a href="{% url 'action_history' product_tab.product|content_type product_tab.product.id %}">
+                                                                <i class="fa-solid fa-clock-rotate-left"></i>
+                                                                {% trans "View History" %}
+                                                            </a>
+                                                        </li>
+                                                    {% endif %}
+                                                    {% if product_tab.product|has_object_permission:"delete" %}
+                                                        <li role="separator" class="divider"></li>
+                                                        <li role="presentation">
+                                                            <a class="text-danger" href="{% url 'delete_product' product_tab.product.id %}">
+                                                                <i class="fa-solid fa-trash"></i>
+                                                                {% trans "Delete" %}
+                                                            </a>
+                                                        </li>
+                                                    {% endif %}
+                                                </ul>
+                                            </li>
+                                        {% endif %}
+                                    </ul>
+                                </div>
+                            </div>
+                        {% else %}
+                            <div class="row hidden-xs">
+                                <div class="col-lg-12">
+                                    {% if request.session.dojo_breadcrumbs %}
+                                        <ul class="breadcrumb main">
+                                            {% for crumb in request.session.dojo_breadcrumbs %}
+                                                <li class="{% if forloop.last %}active{% endif %}">
+                                                    <a class="{% if forloop.last %}active{% endif %}" href="{{ crumb.url }}">{{ crumb.title }}</a>
+                                                </li>
+                                            {% endfor %}
+                                        </ul>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        {% endif %}
+                    {% endblock %}
+                    <!-- end of tabs -->
+                    {% if messages %}
+                    <div class="row">
+                        <div class="col-lg-12">
+                                {% for message in messages %}
+                                    <div class="alert {{ message.tags }} alert-dismissible" role="alert"
+                                         x-data="{ show: true }" x-show="show" x-transition>
+                                        <button type="button" class="close" @click="show = false" aria-label="{% trans 'Close' %}">
+                                            <span aria-hidden="true">&times;</span>
+                                        </button>
+                                        {{ message }}
+                                    </div>
+                                {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                    <div class="row">
+                        <div id="base-content" class="col-lg-12">
+                            {% include "dojo/breadcrumbs/settings_breadcrumb.html" %}
+                            {% include "dojo/breadcrumbs/engagement_breadcrumb.html" %}
+                            {% include "dojo/breadcrumbs/finding_breadcrumb.html" %}
+                            {% include "dojo/breadcrumbs/endpoint_breadcrumb.html" %}
+                            {% include "dojo/breadcrumbs/custom_breadcrumb.html" %}
+                            {% block content %}
+                            {% endblock %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Modals wrapper -->
+            <div id="dojo-modals-wrapper" class="dojo-modals-wrapper">
+            {% block modals %}
+            {% endblock %}
+            </div>
+
+            <!-- Session Timeout Dialog -->
+            <dialog id="sessionTimeoutDialog" class="modal" aria-labelledby="sessionTimeoutTitle">
+                <div class="modal-header">
+                    <h4 class="modal-title" id="sessionTimeoutTitle">Session Expiring Soon</h4>
+                    <button onclick="this.closest('dialog').close()" class="close">&times;</button>
+                </div>
+                <div class="modal-body">
+                    Your session is about to expire due to inactivity.
+                </div>
+                <div class="modal-footer">
+                    <button onclick="this.closest('dialog').close()" class="btn btn-primary">Close</button>
+                </div>
+            </dialog>
+
+            <!-- Footer -->
+            <div id="footer-wrapper">
+            {% block footer %}
+                <footer class="border-t border-border bg-frame py-8 mt-8">
+                    <div class="text-center text-sm text-gray-500">
+                        <p>
+                            <a href="{% url 'home' %}">
+                                <img src="{% static "dojo/img/symbol.svg" %}" alt="{% trans "DefectDojo Chop" %}" style="height:40px;width:auto;display:inline-block"/>
+                            </a>
+                        </p>
+                        <p class="mt-2">{% dojo_version %} ({% dojo_current_hash %})</p>
+                        <p>
+                            Detailed DefectDojo documentation can be found in our <a href="{% dojo_docs_url %}" class="text-dd-interactive-700 hover:underline">GitHub Pages</a>.
+                        </p>
+                        <p>
+                            DefectDojo is licensed under the <a href="https://github.com/DefectDojo/django-DefectDojo/blob/master/LICENSE.md" class="text-dd-interactive-700 hover:underline">3-Clause BSD License</a>.
+                            | <a href="https://github.com/DefectDojo/django-DefectDojo/blob/master/NOTICE" class="text-dd-interactive-700 hover:underline">Dependencies Notice.</a>
+                        </p>
+                        <p>&copy; 2015-{% now "Y" %} DefectDojo, Inc. All rights reserved. DefectDojo is trademark of DefectDojo, Inc.</p>
+                    </div>
+                </footer>
+            {% endblock %}
+            </div>
+        </div>
+        <!-- end #wrapper -->
+
+        <!-- our JS -->
+        <script src="{% static "dojo/js/index.js" %}?v={% static_v "dojo/js/index.js" %}"></script>
+
+        <!-- CVSS -->
+        <script src="{% static "dojo/js/cvsscalc31_helptext.js" %}"></script>
+        <script src="{% static "dojo/js/cvsscalc31.js" %}"></script>
+        <script src="{% static "dojo/js/cvss_calculator.js" %}"></script>
+
+        <script type="application/javascript">
+            document.addEventListener('DOMContentLoaded', function() {
+
+                {% if request.user.is_authenticated %}
+                    // Session timeout notification (vanilla JS)
+                    (function() {
+                        var warningTime = "{{ session_notify_time|default:0|escapejs }}";
+                        var currentTime = Math.floor(Date.now() / 1000);
+                        var timeout = warningTime - currentTime;
+                        setTimeout(function() {
+                            var dlg = document.getElementById('sessionTimeoutDialog');
+                            if (dlg) dlg.showModal();
+                        }, Math.min(timeout, 2147483) * 1000);
+                    })();
+                {% endif %}
+
+                // Jira issue paste handler — strip URL to issue key (vanilla JS)
+                var jiraInput = document.getElementById('id_jiraform-jira_issue');
+                if (jiraInput) {
+                    jiraInput.addEventListener('paste', function() {
+                        var el = this;
+                        setTimeout(function() {
+                            el.value = el.value.substring(el.value.lastIndexOf('/') + 1);
+                        }, 100);
+                    });
+                }
+
+                // Bootstrap-select removed — native <select> styled by @tailwindcss/forms
+            });
+        </script>
+        {% block extra_javascript %}
+        {% endblock %}
+        {% block postscript %}
+        {% endblock %}
+    </body>
+</html>

@@ -1,0 +1,9 @@
+{
+  "report_title": "Threagile Threat Model",
+  "findings": [{
+    "id": "mitm",
+    "title": "Missing TLS Encryption",
+    "severity": "high",
+    "description": "Unencrypted communication channel"
+  }]
+}

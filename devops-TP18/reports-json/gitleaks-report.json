@@ -1,0 +1,21 @@
+[
+  {
+    "Description": "Generic Secret",
+    "StartLine": 1,
+    "EndLine": 1,
+    "StartColumn": 1,
+    "EndColumn": 20,
+    "Match": "secret_key=1234567890",
+    "Secret": "1234567890",
+    "File": "config.py",
+    "SymlinkFile": "",
+    "Commit": "1234567890abcdef1234567890abcdef12345678",
+    "Entropy": 3.5,
+    "Author": "Dev",
+    "Email": "dev@example.com",
+    "Date": "2026-10-14T00:00:00Z",
+    "Message": "commit message",
+    "RuleID": "generic-api-key",
+    "Fingerprint": "1234567890abcdef1234567890abcdef12345678"
+  }
+]

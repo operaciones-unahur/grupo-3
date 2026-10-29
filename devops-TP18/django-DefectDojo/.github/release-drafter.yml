@@ -1,0 +1,92 @@
+name-template: '$RESOLVED_VERSION 🌈'
+tag-template: '$RESOLVED_VERSION'
+
+branches:
+  - master
+
+categories:
+  - title: '💣 Breaking changes'
+    when:
+      labels:
+        - 'Breaking Changes'
+  - title: '🚩 Changes to `settings.dist.py` / `local_settings.py`'
+    when:
+      labels:
+        - 'settings_changes'
+  - title: '🚩 Database migration'
+    when:
+      labels:
+        - 'New Migration'
+  - title: '🚩 Requires hash code recomputation'
+    when:
+      labels:
+        - 'hashcode-update-needed'
+  - title: '🚩 Security'
+    when:
+      labels:
+        - 'security'
+  - title: '🚀 New importers'
+    when:
+      labels:
+        - 'Import Scans'
+  - title: '🚀 General features and enhancements'
+    when:
+      labels:
+        - 'feature'
+        - 'enhancement'
+        - 'performance'
+  - title: '🚀 API features and enhancements'
+    when:
+      label: 'apiv2'
+  - title: '🐛 Bug Fixes'
+    when:
+      labels:
+        - 'fix'
+        - 'bugfix'
+        - 'bug'
+  - title: 📝 Documentation updates
+    when:
+      label: 'documentation'
+  - title: '🖌 Updates in UI'
+    when:
+      label: 'ui'
+  - title: '🗣 Updates in localization'
+    when:
+      label: 'localization'
+  - title: '🔧 Improved code quality with linters'
+    when:
+      label: 'lint'
+  - title: '⚙️ Improvemets of GitHub Actions'
+    when:
+      label: 'gha'
+  - title: '🧰 Maintenance'
+    collapse-after: 3
+    when:
+      labels:
+        - 'dependencies'
+        - 'maintenance'
+  # These categories only feed $RESOLVED_VERSION; they render no changelog section.
+  # When nothing matches, the increment falls back to 'patch' (release-drafter's default).
+  - type: 'version-resolver'
+    semver-increment: 'major'
+    when:
+      label: 'major'
+  - type: 'version-resolver'
+    semver-increment: 'minor'
+    when:
+      label: 'minor'
+  - type: 'version-resolver'
+    semver-increment: 'patch'
+    when:
+      label: 'patch'
+exclude-labels:
+  - 'skip-changelog'
+  # Automated release-train PRs ('Release: Merge release ...' / 'Release: Merge back ...')
+  - 'release-management'
+
+change-template: '- $TITLE @$AUTHOR (#$NUMBER)'
+template: |
+  Please consult the [Upgrade notes in the documentation](https://docs.defectdojo.com/releases/os_upgrading/upgrading_guide/) for specific instructions for this release, and general upgrade instructions. Below is an automatically generated list of all PRs merged since the previous release.
+
+  ## Changes since $PREVIOUS_TAG
+  $CHANGES

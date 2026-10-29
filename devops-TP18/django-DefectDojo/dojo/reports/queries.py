@@ -1,0 +1,78 @@
+
+from django.db.models import Prefetch, QuerySet
+
+from dojo.authorization.roles_permissions import Permissions
+from dojo.finding.queries import get_authorized_findings, prefetch_for_findings
+from dojo.location.feature import locations_enabled
+from dojo.location.models import LocationFindingReference
+from dojo.location.queries import annotate_location_counts_and_status
+from dojo.location.status import FindingLocationStatus
+from dojo.models import Finding
+
+
+def prefetch_related_findings_for_report(findings: QuerySet) -> QuerySet:
+    # This function is the single authority for the report's finding prefetch set. The caller may
+    # hand us a queryset that already carries its own prefetch_related lookups (the finding viewset's
+    # get_queryset prefetches vulnerability_references for the finding serializer, for example).
+    # Layering the report's own vulnerability_id_prefetch() on top of that would register the same
+    # relation twice with two different Prefetch querysets, which makes Django raise
+    # "'vulnerability_references' lookup was already seen with a different queryset" while the report
+    # serializer iterates the queryset -- surfacing as a 500 on report generation. Reset any inherited
+    # prefetches first so this function owns the complete, conflict-free set.
+    findings = findings.prefetch_related(None)
+    return prefetch_for_findings(
+        findings.prefetch_related(
+            # Some of the fields are removed here because they are being
+            # prefetched in the prefetch_for_findings function
+            "test__engagement__product__prod_type",
+            "risk_acceptance_set__accepted_findings",
+            "burprawrequestresponse_set",
+            "files",
+            "reporter",
+            "mitigated_by",
+        ),
+    )
+
+
+def prefetch_related_endpoints_for_report(endpoints: QuerySet, product=None, user=None) -> QuerySet:
+    if locations_enabled():
+        # Locations are shared across products, so an authorized Location says
+        # nothing about who may see the findings hanging off it.
+        return annotate_location_counts_and_status(
+            endpoints.prefetch_related(
+                "tags",
+                Prefetch(
+                    "findings",
+                    queryset=LocationFindingReference.objects.filter(
+                        status=FindingLocationStatus.Active,
+                        finding__in=get_authorized_findings(Permissions.Finding_View, user=user),
+                    )
+                    .prefetch_related("finding")
+                    .order_by("finding__numerical_severity"),
+                    to_attr="_active_annotated_findings",
+                ),
+            ),
+            user=user,
+        )
+    # TODO: Delete this after the move to Locations
+    findings_qs = Finding.objects.filter(
+        active=True,
+        out_of_scope=False,
+        mitigated__isnull=True,
+        false_p=False,
+        duplicate=False,
+        status_finding__false_positive=False,
+        status_finding__out_of_scope=False,
+        status_finding__risk_accepted=False,
+    )
+    if product is not None:
+        findings_qs = findings_qs.filter(test__engagement__product=product)
+    return endpoints.prefetch_related(
+        "product",
+        "tags",
+        Prefetch(
+            "findings",
+            queryset=prefetch_for_findings(findings_qs.order_by("numerical_severity")),
+            to_attr="active_annotated_findings",
+        ),
+    )

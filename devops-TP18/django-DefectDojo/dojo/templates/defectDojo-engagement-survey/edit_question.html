@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% load static %}
+{% block content %}
+    {{ block.super }}
+    <h3>Edit Question: {{ question.name }}</h3>
+
+    <form class="" method="post">{% csrf_token %}
+        {% include "dojo/form_fields.html" with form=form %}
+        <div class="form-group">
+            <div class="col-sm-offset-2 col-sm-10">
+                <input class="btn btn-primary" type="submit" label="edit_questionnaire_questions" name="edit_questionnaire_questions"
+                       value="Submit"/>
+            </div>
+        </div>
+    </form>
+{% endblock %}
+{% block postscript %}
+    {{ block.super }}
+    <script type="application/javascript">
+        $(function () {
+            $("#id_choices").bind("DOMSubtreeModified", function () {
+                $("#id_choices").trigger("chosen:updated");
+            });
+        });
+    </script>
+    <script type="application/javascript" src="{% static "admin/js/admin/RelatedObjectLookups.js" %}"></script>
+{% endblock %}

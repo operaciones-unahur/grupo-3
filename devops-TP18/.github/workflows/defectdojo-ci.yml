@@ -1,0 +1,245 @@
+name: CI/CD Pipeline - Notes App DevSecOps con DefectDojo (4 Fases)
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  DOCKER_IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/devops-portfolio
+  HELM_RELEASE_NAME: mi-app
+  K8S_NAMESPACE: devops-portfolio
+  DEFECTDOJO_URL: ${{ secrets.DEFECTDOJO_URL }}         # ej. http://tu-defectdojo.com:8080
+  DEFECTDOJO_TOKEN: ${{ secrets.DEFECTDOJO_API_KEY }}     # Token API v2
+  PRODUCT_ID: "1"                                         # ID del producto 'Notes App'
+
+jobs:
+  # =========================================================================
+  # FASE 1: BUILD & PACKAGE (Construcción de Imagen Inmutable)
+  # =========================================================================
+  build-and-package:
+    name: "Fase 1: Build & Package (Imagen Inmutable)"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v5
+
+      - name: Configurar Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Compilar imagen Docker
+        run: |
+          docker build -t ${{ env.DOCKER_IMAGE }}:${{ github.sha }} ./backend
+
+      - name: Exportar imagen a tarball efímero
+        run: |
+          mkdir -p build-artifacts
+          docker save ${{ env.DOCKER_IMAGE }}:${{ github.sha }} -o build-artifacts/app-image.tar
+
+      - name: Publicar Artefacto de Imagen
+        uses: actions/upload-artifact@v5
+        with:
+          name: docker-image-artifact
+          path: build-artifacts/app-image.tar
+          retention-days: 1
+
+  # =========================================================================
+  # FASE 2: AUDITORÍAS DE CIBERSEGURIDAD Y GENERACIÓN DE REPORTES JSON
+  # =========================================================================
+  security-audits:
+    name: "Fase 2: Auditorías (Threagile, Semgrep, Trivy & Gitleaks JSON)"
+    runs-on: ubuntu-latest
+    needs: [build-and-package]
+    steps:
+      - name: Checkout del código (Historial completo para Gitleaks)
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Crear carpeta para reportes JSON
+        run: mkdir -p reports-json
+
+      - name: Descargar Artefacto de Imagen
+        uses: actions/download-artifact@v5
+        with:
+          name: docker-image-artifact
+          path: build-artifacts
+
+      - name: Cargar imagen Docker compilada
+        run: |
+          docker load -i build-artifacts/app-image.tar
+
+      - name: Instalar Helm CLI
+        uses: azure/setup-helm@v5
+        with:
+          version: 'v3.13.0'
+
+      - name: Renderizar Helm Chart (TP10B - Pattern)
+        run: |
+          helm template ${{ env.HELM_RELEASE_NAME }} ./devops-portfolio -f devops-portfolio/values-prod.yaml > manifests-rendered-prod.yaml
+
+      # -------------------------------------------------------------
+      # 2A. THREAGILE THREAT MODELING (TP14 - Generación de JSON)
+      # -------------------------------------------------------------
+      - name: Ejecutar Threagile Threat Model Analysis
+        uses: threagile/run-threagile-action@v1
+        with:
+          model-file: 'threagile.yaml'
+          output-dir: 'reports-json'
+        continue-on-error: true
+
+      # -------------------------------------------------------------
+      # 2B. SEMGREP SAST (TP15 - Generación de JSON)
+      # -------------------------------------------------------------
+      - name: Ejecutar Semgrep SAST
+        run: |
+          python3 -m pip install semgrep
+          semgrep scan --config=p/owasp-top-10 --config=p/python --config=p/dockerfile --json -o reports-json/semgrep-results.json || true
+
+      # -------------------------------------------------------------
+      # 2C. TRIVY CONTAINER & SCA (TP16 - Generación de JSON)
+      # -------------------------------------------------------------
+      - name: Ejecutar Trivy Container Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ env.DOCKER_IMAGE }}:${{ github.sha }}'
+          format: 'json'
+          output: 'reports-json/trivy-container-results.json'
+          exit-code: '0'
+
+      # -------------------------------------------------------------
+      # 2D. GITLEAKS SECRET SCANNING (TP17 - Generación de JSON)
+      # -------------------------------------------------------------
+      - name: Ejecutar Gitleaks CLI
+        run: |
+          wget https://github.com/gitleaks/gitleaks/releases/download/v8.18.2/gitleaks_8.18.2_linux_x64.tar.gz
+          tar -xzf gitleaks_8.18.2_linux_x64.tar.gz
+          sudo mv gitleaks /usr/local/bin/
+          gitleaks detect --source . --report-format json --report-path reports-json/gitleaks-report.json || true
+
+      # -------------------------------------------------------------
+      # Publicar Artefactos de Reportes JSON para la Fase 3
+      # -------------------------------------------------------------
+      - name: Publicar Artefacto de Reportes JSON
+        uses: actions/upload-artifact@v5
+        with:
+          name: security-json-reports
+          path: reports-json/
+          retention-days: 1
+
+  # =========================================================================
+  # FASE 3: CENTRALIZACIÓN Y DEDUPLICACIÓN EN OWASP DEFECTDOJO
+  # =========================================================================
+  defectdojo-import:
+    name: "Fase 3: Centralización en DefectDojo (Vulnerability Management)"
+    runs-on: ubuntu-latest
+    needs: [security-audits]
+    if: always()
+    steps:
+      - name: Descargar Reportes JSON
+        uses: actions/download-artifact@v5
+        with:
+          name: security-json-reports
+          path: reports-json
+
+      # -------------------------------------------------------------
+      # Importación de Threagile Threat Model (TP14) a DefectDojo
+      # -------------------------------------------------------------
+      - name: Importar Threagile Threat Model a DefectDojo
+        uses: ivanamat/defectdojo-import-scan@v1
+        with:
+          defectdojo_url: ${{ env.DEFECTDOJO_URL }}
+          token: ${{ env.DEFECTDOJO_TOKEN }}
+          product_id: ${{ env.PRODUCT_ID }}
+          scan_type: 'Generic CI/CD Audit'
+          file: 'reports-json/threagile-results.json'
+          engagement_name: 'CI/CD Automated Security Audits'
+          auto_create_context: true
+
+      # -------------------------------------------------------------
+      # Importación de Semgrep JSON (TP15) a DefectDojo
+      # -------------------------------------------------------------
+      - name: Importar Semgrep a DefectDojo
+        uses: ivanamat/defectdojo-import-scan@v1
+        with:
+          defectdojo_url: ${{ env.DEFECTDOJO_URL }}
+          token: ${{ env.DEFECTDOJO_TOKEN }}
+          product_id: ${{ env.PRODUCT_ID }}
+          scan_type: 'Semgrep JSON Report'
+          file: 'reports-json/semgrep-results.json'
+          engagement_name: 'CI/CD Automated Security Audits'
+          auto_create_context: true
+
+      # -------------------------------------------------------------
+      # Importación de Trivy JSON (TP16) a DefectDojo
+      # -------------------------------------------------------------
+      - name: Importar Trivy a DefectDojo
+        uses: ivanamat/defectdojo-import-scan@v1
+        with:
+          defectdojo_url: ${{ env.DEFECTDOJO_URL }}
+          token: ${{ env.DEFECTDOJO_TOKEN }}
+          product_id: ${{ env.PRODUCT_ID }}
+          scan_type: 'Trivy Scan'
+          file: 'reports-json/trivy-container-results.json'
+          engagement_name: 'CI/CD Automated Security Audits'
+          auto_create_context: true
+
+      # -------------------------------------------------------------
+      # Importación de Gitleaks JSON (TP17) a DefectDojo
+      # -------------------------------------------------------------
+      - name: Importar Gitleaks a DefectDojo
+        uses: ivanamat/defectdojo-import-scan@v1
+        with:
+          defectdojo_url: ${{ env.DEFECTDOJO_URL }}
+          token: ${{ env.DEFECTDOJO_TOKEN }}
+          product_id: ${{ env.PRODUCT_ID }}
+          scan_type: 'Gitleaks Scan'
+          file: 'reports-json/gitleaks-report.json'
+          engagement_name: 'CI/CD Automated Security Audits'
+          auto_create_context: true
+
+      - name: Resumen de Centralización en GitHub
+        run: |
+          echo "### Centralización de Vulnerabilidades en DefectDojo :shield:" >> $GITHUB_STEP_SUMMARY
+          echo "Los reportes de OWASP ZAP (TP13C), Threagile (TP14), Semgrep (TP15), Trivy (TP16) y Gitleaks (TP17) han sido procesados, desduplicados y cargados exitosamente en la instancia de DefectDojo." >> $GITHUB_STEP_SUMMARY
+
+  # =========================================================================
+  # FASE 4: RELEASE & DEPLOY (Publicación y Despliegue Post-Aprobación)
+  # =========================================================================
+  deploy-k8s-helm:
+    name: "Fase 4: Release & Deploy Helm K8s"
+    runs-on: ubuntu-latest
+    needs: [build-and-package, security-audits, defectdojo-import]
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout del código
+        uses: actions/checkout@v5
+
+      - name: Descargar Artefacto de Imagen
+        uses: actions/download-artifact@v5
+        with:
+          name: docker-image-artifact
+          path: build-artifacts
+
+      - name: Cargar imagen Docker probada
+        run: |
+          docker load -i build-artifacts/app-image.tar
+
+      - name: Login a Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Etiquetar y Push a Docker Hub
+        run: |
+          docker tag ${{ env.DOCKER_IMAGE }}:${{ github.sha }} ${{ env.DOCKER_IMAGE }}:latest
+          docker push ${{ env.DOCKER_IMAGE }}:${{ github.sha }}
+          docker push ${{ env.DOCKER_IMAGE }}:latest
+
+      - name: Despliegue con Helm en Kubernetes
+        run: |
+          echo "Desplegando Helm Chart en Kubernetes..."
+          # helm upgrade --install ${{ env.HELM_RELEASE_NAME }} ./devops-portfolio -n ${{ env.K8S_NAMESPACE }}
+

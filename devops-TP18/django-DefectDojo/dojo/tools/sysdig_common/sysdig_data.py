@@ -1,0 +1,85 @@
+from typing import TYPE_CHECKING
+
+from dojo.location.feature import locations_enabled
+from dojo.tools.locations import LocationData
+
+if TYPE_CHECKING:
+    import datetime
+
+
+SYSDIG_TYPE_TO_PURL = {
+    "apk": "apk", "deb": "deb", "rpm": "rpm",
+    "npm": "npm", "python": "pypi", "java": "maven",
+    "go": "golang", "gem": "gem", "nuget": "nuget",
+    "composer": "composer", "cargo": "cargo",
+}
+
+
+class SysdigData:
+
+    @classmethod
+    def _map_severity(cls, severity):
+        severity_mapping = {
+            "CRITICAL": "Critical",
+            "HIGH": "High",
+            "MEDIUM": "Medium",
+            "LOW": "Low",
+            "NEGLIGIBLE": "Info",
+        }
+
+        return severity_mapping.get(severity.upper() if severity else "", "Info")
+
+    """
+    Data class to represent the Sysdig data extracted from sources like CSV or JSON.
+    """
+    def __init__(self):
+        self.vulnerability_id: str = ""
+        self.url: str = ""
+        self.severity: str = ""
+        self.package_name: str = ""
+        self.package_version: str = ""
+        self.package_type: str = ""
+        self.package_path: str = ""
+        self.image: str = ""
+        self.os_name: str = ""
+        self.cvss_version: float = 0
+        self.cvss_score: float = 0
+        self.cvss_vector: str = ""
+        self.vuln_link: str = ""
+        self.vuln_publish_date: str = ""
+        self.vuln_fix_date: datetime.date = None
+        self.vuln_fix_version: str = ""
+        self.public_exploit: str = ""
+        self.k8s_cluster_name: str = ""
+        self.k8s_namespace_name: str = ""
+        self.k8s_workload_type: str = ""
+        self.k8s_workload_name: str = ""
+        self.k8s_container_name: str = ""
+        self.image_id: str = ""
+        self.k8s_pod_count: str = 0
+        self.in_use: bool = False
+        self.risk_accepted: bool = False
+        self.publish_date: datetime.date = None
+        self.component_version: str = ""
+        self.package_suggested_fix: str = ""
+        self.image_type: str = ""
+        self.registry_name: str = ""
+        self.registry_image_repository: str = ""
+        self.registry_vendor: str = ""
+        self.cloud_provider_name: str = ""
+        self.cloud_provider_account_id: str = ""
+        self.cloud_provider_region: str = ""
+        self.epss_score: float = None
+
+
+def add_package_info(finding, package_name, package_type, package_version, package_path):
+    if locations_enabled() and package_name and package_type:
+        purl_type = SYSDIG_TYPE_TO_PURL.get(package_type.lower())
+        finding.unsaved_locations.append(
+            LocationData.dependency(
+                purl_type=purl_type,
+                name=package_name,
+                version=package_version,
+                file_path=package_path,
+            ),
+        )

@@ -1,0 +1,9 @@
+FROM prom/prometheus:v3.5.0
+
+USER root
+
+RUN mkdir -p /usr/local/bin \
+    && printf '#!/bin/sh\nif [ "$1" = "-X" ] && [ "$2" = "POST" ]; then\n  shift 2\n  exec /bin/wget -qO- --post-data="" "$@"\nfi\nexec /bin/wget -qO- "$@"\n' > /usr/local/bin/curl \
+    && chmod +x /usr/local/bin/curl
+
+USER nobody

@@ -1,0 +1,581 @@
+import logging
+import os
+import re
+import unittest
+import warnings
+from pathlib import Path
+
+from selenium import webdriver
+from selenium.common.exceptions import NoAlertPresentException, NoSuchElementException, TimeoutException
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions
+from selenium.webdriver.support.ui import Select, WebDriverWait
+
+# import time
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "WARNING"),
+    format="%(levelname)s %(name)s: %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+
+dd_driver = None
+dd_driver_options = None
+
+
+def on_exception_html_source_logger(func):
+    def wrapper(self, *args, **kwargs):
+        try:
+            return func(self, *args, **kwargs)
+        except Exception:
+            logger.info(f"exception occured at url: {self.driver.current_url}")
+            logger.info(f"page source: {self.driver.page_source}")
+            with Path("selenium_page_source.html").open("w", encoding="utf-8") as f:
+                f.writelines(self.driver.page_source)
+            raise
+    return wrapper
+
+
+def set_suite_settings(suite, *, jira=False, github=False, block_execution=False):
+    if jira:
+        suite.addTest(BaseTestCase("enable_jira"))
+    else:
+        suite.addTest(BaseTestCase("disable_jira"))
+    if github:
+        suite.addTest(BaseTestCase("enable_github"))
+    else:
+        suite.addTest(BaseTestCase("disable_github"))
+    if block_execution:
+        suite.addTest(BaseTestCase("enable_block_execution"))
+    else:
+        suite.addTest(BaseTestCase("disable_block_execution"))
+
+
+class BaseTestCase(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+
+        # Path for automatic downloads, mapped to the media path
+        cls.export_path = "/app"
+
+        global dd_driver  # noqa: PLW0603 global variables are dirty, but in unit tests scenario's like these they are acceptable
+        if not dd_driver:
+            # setupModule and tearDownModule are not working in our scenario, so for now we use setupClass and a global variable
+            logger.info(f"launching browser for: {cls.__name__}")
+            global dd_driver_options  # noqa: PLW0603 global variables are dirty, but in unit tests scenario's like these they are acceptable
+            dd_driver_options = Options()
+
+            # headless means no UI, if you want to see what is happening remove headless. Adding detach will leave the window open after the test
+            dd_driver_options.add_argument("--headless")
+            # dd_driver_options.add_experimental_option("detach", True)
+
+            # the next 2 maybe needed in some scenario's for example on WSL or other headless situations
+            dd_driver_options.add_argument("--no-sandbox")
+            dd_driver_options.add_argument("--disable-dev-shm-usage")
+            dd_driver_options.add_argument(
+                "--disable-gpu",
+            )  # on windows sometimes chrome can't start with certain gpu driver versions, even in headless mode
+
+            # start maximized or at least with sufficient with because datatables will hide certain controls when the screen is too narrow
+            dd_driver_options.add_argument("--window-size=1280,1024")
+            # dd_driver_options.add_argument("--start-maximized")
+
+            dd_driver_options.set_capability(name="acceptInsecureCerts", value=True)
+
+            # some extra logging can be turned on if you want to query the browser javascripe console in your tests
+            desired = webdriver.DesiredCapabilities.CHROME
+            desired["goog:loggingPrefs"] = {"browser": "ALL"}
+
+            # set automatic downloads to test csv and excel export
+            prefs = {"download.default_directory": cls.export_path}
+            dd_driver_options.add_experimental_option("prefs", prefs)
+
+            # change path of chromedriver according to which directory you have chromedriver.
+            logger.info(
+                f"starting chromedriver with options: {vars(dd_driver_options)} {desired}",
+            )
+
+            # TODO: - this filter needs to be removed
+            warnings.filterwarnings("ignore", message="executable_path has been deprecated, please pass in a Service object")
+            warnings.filterwarnings("ignore", message="use options instead of chrome_options")
+            warnings.filterwarnings("ignore", message="desired_capabilities has been deprecated, please pass in a Service object")
+            warnings.filterwarnings("ignore", message="It is deprecated to return a value that is not None from a test case")
+
+            dd_driver = webdriver.Chrome(
+                os.environ["CHROMEDRIVER"],
+                chrome_options=dd_driver_options,
+                desired_capabilities=desired,
+            )
+            # best practice is only use explicit waits
+            dd_driver.implicitly_wait(1)
+
+        cls.driver = dd_driver
+        cls.base_url = os.environ["DD_BASE_URL"]
+
+    def setUp(self):
+        self.verificationErrors = []
+        self.accept_next_alert = True
+        self.accept_javascript_errors = False
+        self.driver.execute_script("console.clear()")
+        # clear browser console logs?
+
+    def login_page(self):
+        driver = self.driver
+        driver.get(self.base_url + "login")
+        driver.find_element(By.ID, "id_username").clear()
+        driver.find_element(By.ID, "id_username").send_keys(os.environ["DD_ADMIN_USER"])
+        driver.find_element(By.ID, "id_password").clear()
+        driver.find_element(By.ID, "id_password").send_keys(
+            os.environ["DD_ADMIN_PASSWORD"],
+        )
+        driver.find_element(By.CSS_SELECTOR, "button.login-btn, button.btn-success").click()
+
+        self.assertFalse(
+            self.is_element_by_css_selector_present(
+                ".alert-danger", "Please enter a correct username and password",
+            ),
+        )
+        return driver
+
+    def login_standard_page(self):
+        driver = self.driver
+        driver.get(self.base_url + "login")
+        driver.find_element(By.ID, "id_username").clear()
+        driver.find_element(By.ID, "id_username").send_keys("propersahm")
+        driver.find_element(By.ID, "id_password").clear()
+        driver.find_element(By.ID, "id_password").send_keys("Def3ctD0jo&")
+        driver.find_element(By.CSS_SELECTOR, "button.login-btn, button.btn-success").click()
+
+        self.assertFalse(
+            self.is_element_by_css_selector_present(
+                ".alert-danger", "Please enter a correct username and password",
+            ),
+        )
+        return driver
+
+    def test_login(self):
+        return self.login_page()
+
+    def logout(self):
+        driver = self.driver
+        driver.get(self.base_url + "logout")
+
+        self.assertTrue(self.is_text_present_on_page("Login"))
+        return driver
+
+    def test_logout(self):
+        return self.logout()
+
+    @on_exception_html_source_logger
+    def delete_product_if_exists(self, name="QA Test"):
+        driver = self.driver
+        # Navigate to the product page
+        self.goto_product_overview(driver)
+        # Select the specific product to delete
+        qa_products = driver.find_elements(By.LINK_TEXT, name)
+
+        if len(qa_products) > 0:
+            self.test_delete_product(name)
+
+    @on_exception_html_source_logger
+    def delete_finding_template_if_exists(self, name="App Vulnerable to XSS"):
+        driver = self.driver
+
+        driver.get(self.base_url + "template")
+        # Click on `Delete Template` button
+        templates = driver.find_elements(By.LINK_TEXT, name)
+        if len(templates) > 0:
+            driver.find_element(By.ID, "id_delete").click()
+            # Click 'Yes' on Alert popup
+            driver.switch_to.alert.accept()
+
+    # used to load some page just to get started
+    # we choose /user because it's lightweight and fast
+    def goto_some_page(self):
+        driver = self.driver
+        driver.get(self.base_url + "user")
+        return driver
+
+    def goto_product_overview(self, driver):
+        driver.get(self.base_url + "product")
+        self.wait_for_datatable_if_content("no_products", "products_wrapper")
+        return driver
+
+    def goto_product_type_overview(self, driver):
+        driver.get(self.base_url + "product/type")
+        return driver
+
+    def goto_component_overview(self, driver):
+        driver.get(self.base_url + "components")
+        return driver
+
+    def goto_active_engagements_overview(self, driver):
+        driver.get(self.base_url + "engagement/active")
+        return driver
+
+    def goto_all_engagements_overview(self, driver):
+        driver.get(self.base_url + "engagement/all")
+        return driver
+
+    def goto_all_engagements_by_product_overview(self, driver):
+        return self.goto_engagements_internal(driver, "engagements_all")
+
+    def goto_engagements_internal(self, driver, rel_url):
+        driver.get(self.base_url + rel_url)
+        self.wait_for_datatable_if_content("no_engagements", "engagements_wrapper")
+        return driver
+
+    def goto_all_findings_list(self, driver):
+        driver.get(self.base_url + "finding")
+        self.wait_for_datatable_if_content("no_findings", "open_findings_wrapper")
+        return driver
+
+    def open_product_tab(self, driver, tab):
+        """
+        Click a tab in the product tab bar, e.g. "findings" or "engagements".
+
+        Do not reach for these tabs with By.LINK_TEXT / By.PARTIAL_LINK_TEXT. The
+        global sidebar repeats every one of these labels ("Engagements",
+        "Findings", "Endpoints", "Components", "Metrics") and renders well before
+        the tab bar, so a link-text lookup resolves to the sidebar entry instead.
+        Those sidebar entries only expand a submenu -- they are bound to Alpine
+        with @click.prevent and never navigate -- so the click silently does the
+        wrong thing and the tab's dropdown stays closed. The failure then surfaces
+        much later, as a NoSuchElementException on the menu item you actually
+        wanted, which is in the DOM but not rendered.
+
+        The data-testid attributes live on the tab bar in dojo/templates/base.html.
+        """
+        driver.find_element(By.CSS_SELECTOR, f'[data-testid="product-tab-{tab}"]').click()
+        return driver
+
+    def click_centered(self, driver, element):
+        """
+        Click an element after centring it in the viewport.
+
+        Anything near the bottom of a long form competes with the footer, and
+        the footer wins the click often enough to matter. Selenium sometimes
+        reports that honestly (ElementClickInterceptedException naming
+        #footer-wrapper) and sometimes the click simply lands on the footer and
+        is lost, which is the dangerous case: nothing raises, and the test fails
+        later somewhere that looks unrelated. Centring the element first puts it
+        clear of the footer.
+
+        This bites both kinds of click. A lost click on a submit button leaves
+        the form unsubmitted. A lost click on a checkbox is worse: the submit
+        still happens, so the form saves with the checkbox in its old state and
+        the setting silently does not change.
+        """
+        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", element)
+        element.click()
+        return driver
+
+    def click_submit(self, driver, selector="input.btn.btn-primary"):
+        """Click a form's submit button, clear of the footer. See click_centered()."""
+        return self.click_centered(driver, driver.find_element(By.CSS_SELECTOR, selector))
+
+    def wait_for_datatable_if_content(self, no_content_id, wrapper_id):
+        if not self.is_element_by_id_present(no_content_id):
+            # wait for product_wrapper div as datatables javascript modifies the DOM on page load.
+            WebDriverWait(self.driver, 30).until(
+                expected_conditions.presence_of_element_located((By.ID, wrapper_id)),
+            )
+
+    def is_element_by_css_selector_present(self, selector, text=None):
+        elems = self.driver.find_elements(By.CSS_SELECTOR, selector)
+        if len(elems) == 0:
+            return False
+
+        if text is None:
+            return True
+
+        for elem in elems:
+            logger.info(elem.text)
+            if text in elem.text:
+                return True
+
+        return False
+
+    def is_element_by_id_present(self, elem_id):
+        try:
+            self.driver.find_element(By.ID, elem_id)
+        except NoSuchElementException:
+            return False
+        return True
+
+    def is_info_message_present(self, text=None):
+        return self.is_element_by_css_selector_present(".alert-info", text=text)
+
+    def is_success_message_present(self, text=None):
+        """
+        Wait for the success banner, rather than sampling for it once.
+
+        Every caller asserts the banner IS there, and it only renders after the
+        redirect that follows a form POST. Sampling once leaves the assertion
+        riding on the 1s implicit wait, which is enough locally and not always
+        enough on a loaded CI runner -- a slow redirect then reads as a missing
+        message. Nothing asserts the banner's absence, so waiting costs nothing
+        on the happy path and only delays a genuine failure.
+        """
+        try:
+            WebDriverWait(self.driver, 10).until(
+                lambda _: self.is_element_by_css_selector_present(".alert-success", text=text),
+            )
+        except TimeoutException:
+            return False
+        return True
+
+    def is_error_message_present(self, text=None):
+        return self.is_element_by_css_selector_present(".alert-danger", text=text)
+
+    def is_help_message_present(self, text=None):
+        return self.is_element_by_css_selector_present(".help-block", text=text)
+
+    def is_text_present_on_page(self, text):
+        # DEBUG: couldn't find:  Product type added successfully. path:  //*[contains(text(),'Product type added successfully.')]
+        # can't get this xpath to work
+        # path = "//*[contains(text(), '" + text + "')]"
+        # elems = self.driver.find_elements(By.XPATH, path)
+        # if len(elems) == 0:
+        #     logger.debug("couldn't find: ", text, "path: ", path)
+
+        body = self.driver.find_element(By.TAG_NAME, "body")
+        return re.search(text, body.text)
+
+    def element_exists_by_id(self, elem_id):
+        elems = self.driver.find_elements(By.ID, elem_id)
+        return len(elems) > 0
+
+    def change_system_setting(self, setting_id, *, enable=True):
+        logger.info("changing system setting " + setting_id + " enable: " + str(enable))
+        driver = self.driver
+        driver.get(self.base_url + "system_settings")
+
+        is_enabled = driver.find_element(By.ID, setting_id).is_selected()
+        if (enable and not is_enabled) or (not enable and is_enabled):
+            # driver.find_element(By.XPATH, '//*[@id=' + setting_id + ']').click()
+            self.click_centered(driver, driver.find_element(By.ID, setting_id))
+            # save settings
+            self.click_submit(driver)
+            # Wait for the save to land before reading the checkbox back.
+            # click_submit() only clicks, so without this the read below can hit
+            # the pre-submit document, where the box is already ticked in the DOM
+            # but nothing has been persisted, and the check passes on a lost save.
+            # Waiting for "Settings saved." also rules out the rejection branches
+            # ("Settings cannot be saved: ..."), which re-render the submitted
+            # values on a bound form and would otherwise read back as success.
+            self.assertTrue(self.is_success_message_present(text="Settings saved."))
+
+        is_enabled = driver.find_element(By.ID, setting_id).is_selected()
+
+        if enable:
+            self.assertTrue(is_enabled)
+
+        if not enable:
+            self.assertFalse(is_enabled)
+
+        return is_enabled
+
+    def enable_system_setting(self, setting_id):
+        return self.change_system_setting(setting_id, enable=True)
+
+    def disable_system_setting(self, setting_id):
+        return self.change_system_setting(setting_id, enable=False)
+
+    def enable_jira(self):
+        return self.enable_system_setting("id_enable_jira")
+
+    def disable_jira(self):
+        return self.disable_system_setting("id_enable_jira")
+
+    def disable_github(self):
+        return self.disable_system_setting("id_enable_github")
+
+    def enable_github(self):
+        return self.enable_system_setting("id_enable_github")
+
+    def set_block_execution(self, *, block_execution=True):
+        # we set the admin user (ourselves) to have block_execution checked
+        # this will force dedupe to happen synchronously, among other things like notifications, rules, ...
+        logger.info("setting block execution to: %s", block_execution)
+        driver = self.driver
+        driver.get(self.base_url + "profile")
+        if (
+            driver.find_element(By.ID, "id_block_execution").is_selected()
+            != block_execution
+        ):
+            self.click_centered(driver, driver.find_element(By.ID, "id_block_execution"))
+            # save settings
+            self.click_submit(driver)
+            # Barrier before reading the checkbox back: see change_system_setting above.
+            self.assertTrue(self.is_success_message_present(text="Profile updated successfully."))
+            self.assertEqual(
+                driver.find_element(By.ID, "id_block_execution").is_selected(),
+                block_execution,
+            )
+        return driver
+
+    def enable_block_execution(self):
+        self.set_block_execution()
+
+    def disable_block_execution(self):
+        self.set_block_execution(block_execution=False)
+
+    def set_deduplication_execution_mode(self, mode="async"):
+        # Set the admin user's (ourselves) deduplication_execution_mode profile
+        # field. "async_wait" makes import/reimport block until background
+        # deduplication has finished before returning.
+        logger.info("setting deduplication execution mode to: %s", mode)
+        driver = self.driver
+        driver.get(self.base_url + "profile")
+        select = Select(driver.find_element(By.ID, "id_deduplication_execution_mode"))
+        if select.first_selected_option.get_attribute("value") != mode:
+            select.select_by_value(mode)
+            # save settings
+            self.click_submit(driver)
+            # Wait for the save before reloading: the reload would otherwise cancel
+            # the POST while it is still in flight and the mode would never persist.
+            self.assertTrue(self.is_success_message_present(text="Profile updated successfully."))
+            driver.get(self.base_url + "profile")
+            select = Select(driver.find_element(By.ID, "id_deduplication_execution_mode"))
+            self.assertEqual(select.first_selected_option.get_attribute("value"), mode)
+        return driver
+
+    def enable_deduplication(self):
+        return self.enable_system_setting("id_enable_deduplication")
+
+    def disable_deduplication(self):
+        return self.disable_system_setting("id_enable_deduplication")
+
+    def enable_false_positive_history(self):
+        return self.enable_system_setting("id_false_positive_history")
+
+    def disable_false_positive_history(self):
+        return self.disable_system_setting("id_false_positive_history")
+
+    def enable_retroactive_false_positive_history(self):
+        return self.enable_system_setting("id_retroactive_false_positive_history")
+
+    def disable_retroactive_false_positive_history(self):
+        return self.disable_system_setting("id_retroactive_false_positive_history")
+
+    def is_alert_present(self):
+        try:
+            self.driver.switch_to_alert()
+        except NoAlertPresentException:
+            return False
+        return True
+
+    def close_alert_and_get_its_text(self):
+        try:
+            alert = self.driver.switch_to_alert()
+            alert_text = alert.text
+            if self.accept_next_alert:
+                alert.accept()
+            else:
+                alert.dismiss()
+            return alert_text
+        finally:
+            self.accept_next_alert = True
+
+    def assertNoConsoleErrors(self):
+        """
+        Sample output for levels (i.e. errors are SEVERE)
+        {'level': 'DEBUG', 'message': 'http://localhost:8080/product/type/4/edit 560:12 "debug"', 'source': 'console-api', 'timestamp': 1583952828410}
+        {'level': 'INFO', 'message': 'http://localhost:8080/product/type/4/edit 561:16 "info"', 'source': 'console-api', 'timestamp': 1583952828410}
+        {'level': 'WARNING', 'message': 'http://localhost:8080/product/type/4/edit 562:16 "warning"', 'source': 'console-api', 'timestamp': 1583952828410}
+        {'level': 'SEVERE', 'message': 'http://localhost:8080/product/type/4/edit 563:16 "error"', 'source': 'console-api', 'timestamp': 1583952828410}
+        """
+        for entry in WebdriverOnlyNewLogFacade(self.driver).get_log("browser"):
+            """
+            Images are now working after https://github.com/DefectDojo/django-DefectDojo/pull/3954,
+            but http://localhost:8080/static/dojo/img/zoom-in.cur still produces a 404
+
+            The addition of the trigger exception is due to the Report Builder tests.
+            The addition of the innerHTML exception is due to the test for quick reports in finding_test.py
+            """
+            accepted_javascript_messages = r"(zoom\-in\.cur.*)404\ \(Not\ Found\)|Uncaught TypeError: Cannot read properties of null \(reading \'trigger\'\)|Uncaught TypeError: Cannot read properties of null \(reading \'innerHTML\'\)|Cross-Origin-Opener-Policy header has been ignored"
+
+            if entry["level"] == "SEVERE":
+                # TODO: actually this seems to be the previous url
+                # self.driver.save_screenshot("C:\\Data\\django-DefectDojo\\tests\\javascript-errors.png")
+                # with open("C:\\Data\\django-DefectDojo\\tests\\javascript-errors.html", "w") as f:
+                #    f.write(self.driver.page_source)
+
+                current_url = self.driver.current_url
+                logger.info(entry)
+                logger.info(
+                    "There was a SEVERE javascript error in the console, please check all steps fromt the current test to see where it happens",
+                )
+                logger.info(
+                    "Currently there is no reliable way to find out at which url the error happened, but it could be: ."
+                    + current_url,
+                )
+                if self.accept_javascript_errors:
+                    logger.debug(
+                        "skipping SEVERE javascript error because accept_javascript_errors is True!",
+                    )
+                elif re.search(accepted_javascript_messages, entry["message"]):
+                    logger.debug(
+                        "skipping javascript errors related to known issues, see https://github.com/DefectDojo/django-DefectDojo/blob/master/tests/base_test_class.py#L324",
+                    )
+                else:
+                    # Carry the console entry into the assertion message. On its own
+                    # this assertion reports "'SEVERE' == 'SEVERE'", which says nothing
+                    # about what broke, and the logger lines above do not reliably reach
+                    # a captured CI log. A failure here is usually a side effect of an
+                    # earlier step in the test (often a 404 the browser logged), so the
+                    # message and the url are what make it diagnosable.
+                    self.assertNotEqual(
+                        entry["level"],
+                        "SEVERE",
+                        f"SEVERE javascript console error: {entry['message']} "
+                        f"(source: {entry.get('source')}, current url: {current_url})",
+                    )
+
+        return True
+
+    def tearDown(self):
+        self.assertNoConsoleErrors()
+
+        self.assertEqual([], self.verificationErrors)
+
+    @classmethod
+    def tearDownDriver(cls):
+        logger.info(f"tearDownDriver: {cls.__name__}")
+        if dd_driver:
+            if (
+                not dd_driver_options.experimental_options
+                or not dd_driver_options.experimental_options.get("detach")
+            ):
+                logger.info("closing browser")
+                dd_driver.quit()
+
+
+class WebdriverOnlyNewLogFacade:
+
+    last_timestamp = 0
+
+    def __init__(self, webdriver):
+        self._webdriver = webdriver
+
+    def get_log(self, log_type):
+        last_timestamp = self.last_timestamp
+        entries = self._webdriver.get_log(log_type)
+        filtered = []
+
+        for entry in entries:
+            # check the logged timestamp against the
+            # stored timestamp
+            if entry["timestamp"] > self.last_timestamp:
+                filtered.append(entry)
+
+                # save the last timestamp only if newer
+                # in this set of logs
+                last_timestamp = max(last_timestamp, entry["timestamp"])
+
+        # store the very last timestamp
+        self.last_timestamp = last_timestamp
+
+        return filtered

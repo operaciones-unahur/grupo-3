@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% load static %}
+
+
+{% block content %}
+    {{ block.super }}
+    <h3> Add Endpoint</h3>
+    <form class="" method="post">{% csrf_token %}
+        {% include "dojo/form_fields.html" with form=form %}
+        <div class="form-group">
+            <div class="col-sm-offset-2 col-sm-10">
+                <input class="btn btn-primary" type="submit" name="add_endpoint" value="Submit"/>
+            </div>
+        </div>
+    </form>
+{% endblock %}
+{% block postscript %}
+    {{ block.super }}
+    <script type="text/javascript" src="{% static "admin/js/jquery.init.js"%}"></script>
+    <script type="application/javascript" src="{% static "admin/js/admin/RelatedObjectLookups.js" %}"></script>
+
+    <script type="application/javascript">	
+        $ = django.jQuery;	
+    </script>    
+{% endblock %}

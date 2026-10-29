@@ -1,0 +1,97 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-tp12c-config
+  namespace: devops-portfolio
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+
+    rule_files:
+      - "/etc/prometheus/rules/alerts.yml"
+
+    scrape_configs:
+      - job_name: prometheus
+        static_configs:
+          - targets: ["localhost:9090"]
+
+      - job_name: tp12c-backend
+        metrics_path: /metrics
+        static_configs:
+          - targets: ["tp12c-backend-service.devops-portfolio.svc.cluster.local:5000"]
+
+      - job_name: kube-state-metrics
+        static_configs:
+          - targets: ["kube-state-metrics.devops-portfolio.svc.cluster.local:8080"]
+
+      - job_name: ingress-nginx
+        metrics_path: /metrics
+        static_configs:
+          - targets: ["ingress-nginx-controller.ingress-nginx.svc.cluster.local:10254"]
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus-deployment
+  namespace: devops-portfolio
+  labels:
+    app: prometheus-tp12c
+    component: tp12c
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus-tp12c
+  template:
+    metadata:
+      labels:
+        app: prometheus-tp12c
+        component: tp12c
+    spec:
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v3.5.0
+          args:
+            - "--config.file=/etc/prometheus/prometheus.yml"
+            - "--storage.tsdb.path=/prometheus"
+            - "--web.enable-lifecycle"
+          ports:
+            - containerPort: 9090
+              protocol: TCP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/prometheus
+            - name: rules
+              mountPath: /etc/prometheus/rules
+          readinessProbe:
+            httpGet:
+              path: /-/ready
+              port: 9090
+            initialDelaySeconds: 5
+            periodSeconds: 10
+      volumes:
+        - name: config
+          configMap:
+            name: prometheus-tp12c-config
+        - name: rules
+          configMap:
+            name: prometheus-rules
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-tp12c-service
+  namespace: devops-portfolio
+  labels:
+    app: prometheus-tp12c
+spec:
+  selector:
+    app: prometheus-tp12c
+  ports:
+    - name: http
+      port: 9090
+      targetPort: 9090
+      protocol: TCP

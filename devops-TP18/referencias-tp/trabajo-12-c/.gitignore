@@ -1,0 +1,6 @@
+*.backup
+grafana-datasource-backup.yaml
+prometheus-config-backup.yaml
+
+__pycache__/
+*.pyc

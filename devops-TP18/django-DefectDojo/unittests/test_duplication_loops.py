@@ -1,0 +1,574 @@
+import logging
+from unittest.mock import patch
+
+from crum import impersonate
+from django.db import connection
+from django.test.utils import override_settings
+
+from dojo.finding import helper as finding_helper
+from dojo.finding.deduplication import set_duplicate
+from dojo.finding.helper import removeLoop
+from dojo.management.commands.fix_loop_duplicates import fix_loop_duplicates
+from dojo.models import Engagement, Finding, Product, System_Settings, User, copy_model_util
+from dojo.tasks import _async_dupe_delete_impl  # noqa: PLC2701
+
+from .dojo_test_case import DojoTestCase, versioned_fixtures
+
+logger = logging.getLogger(__name__)
+
+
+@versioned_fixtures
+class TestDuplicationLoops(DojoTestCase):
+    fixtures = ["dojo_testdata.json"]
+
+    def run(self, result=None):
+        testuser = User.objects.get(username="admin")
+        testuser.usercontactinfo.block_execution = True
+        testuser.save()
+
+        # unit tests are running without any user, which will result in actions like dedupe happening in the celery process
+        # this doesn't work in unittests as unittests are using an in memory sqlite database and celery can't see the data
+        # so we're running the test under the admin user context and set block_execution to True
+        with impersonate(testuser):
+            super().run(result)
+
+    def setUp(self):
+        self.finding_a = copy_model_util(Finding.objects.get(id=2), exclude_fields=["duplicate_finding"])
+        self.finding_a.title = "A: " + self.finding_a.title
+        self.finding_a.duplicate = False
+        self.finding_a.hash_code = None
+        self.finding_a.save()
+
+        self.finding_b = copy_model_util(Finding.objects.get(id=3), exclude_fields=["duplicate_finding"])
+        self.finding_b.title = "B: " + self.finding_b.title
+        self.finding_b.duplicate = False
+        self.finding_b.hash_code = None
+        self.finding_b.save()
+
+        self.finding_c = copy_model_util(Finding.objects.get(id=4), exclude_fields=["duplicate_finding"])
+        self.finding_c.pk = None
+        self.finding_c.title = "C: " + self.finding_c.title
+        self.finding_c.duplicate = False
+        self.finding_c.hash_code = None
+        self.finding_c.save()
+
+    def tearDown(self):
+        if self.finding_a.id:
+            self.finding_a.delete()
+        if self.finding_b.id:
+            self.finding_b.delete()
+        if self.finding_c.id:
+            self.finding_c.delete()
+
+    # Set A as duplicate of B and check both directions
+    def test_set_duplicate_basic(self):
+        set_duplicate(self.finding_a, self.finding_b)
+
+        self.assertTrue(self.finding_a.duplicate)
+        self.assertFalse(self.finding_b.duplicate)
+        self.assertEqual(self.finding_a.duplicate_finding.id, self.finding_b.id)
+        self.assertEqual(self.finding_b.duplicate_finding, None)
+        self.assertEqual(self.finding_b.original_finding.first().id, self.finding_a.id)
+        self.assertEqual(self.finding_a.duplicate_finding_set().count(), 1)
+        self.assertEqual(self.finding_b.duplicate_finding_set().count(), 1)
+        self.assertEqual(self.finding_b.duplicate_finding_set().first().id, self.finding_a.id)
+
+    # A duplicate should not be considered to be an original for another finding
+    def test_set_duplicate_exception_1(self):
+        self.finding_a.duplicate = True
+        self.finding_a.save()
+        with self.assertRaisesRegex(Exception, "Existing finding is a duplicate"):
+            set_duplicate(self.finding_b, self.finding_a)
+
+    # A finding should never be the duplicate of itself
+    def test_set_duplicate_exception_2(self):
+        with self.assertRaisesRegex(Exception, "Can not add duplicate to itself"):
+            set_duplicate(self.finding_b, self.finding_b)
+
+    # Two duplicate findings can not be duplicates of each other as well
+    def test_set_duplicate_exception_3(self):
+        set_duplicate(self.finding_a, self.finding_b)
+        set_duplicate(self.finding_c, self.finding_b)
+        with self.assertRaisesRegex(Exception, "Existing finding is a duplicate"):
+            set_duplicate(self.finding_a, self.finding_c)
+
+    # Merge duplicates: If the original of a dupicate is now considered to be a duplicate of a new original the old duplicate should be appended too
+    def test_set_duplicate_exception_merge(self):
+        # A -> B
+        set_duplicate(self.finding_a, self.finding_b)
+        # B -> C
+        set_duplicate(self.finding_b, self.finding_c)
+
+        self.finding_a = Finding.objects.get(id=self.finding_a.id)
+        # A -> C and B -> C
+        self.assertTrue(self.finding_b.duplicate)
+        self.assertTrue(self.finding_a.duplicate)
+        self.assertFalse(self.finding_c.duplicate)
+        self.assertEqual(self.finding_b.duplicate_finding.id, self.finding_c.id)
+        self.assertEqual(self.finding_a.duplicate_finding.id, self.finding_c.id)
+        self.assertEqual(self.finding_c.duplicate_finding, None)
+        self.assertEqual(self.finding_a.duplicate_finding_set().count(), 2)
+        self.assertEqual(self.finding_b.duplicate_finding_set().count(), 2)
+        self.assertEqual(self.finding_a.duplicate_finding.id, self.finding_c.id)
+
+    # if a duplicate is deleted the original should still be present
+    def test_set_duplicate_exception_delete_a_duplicate(self):
+        set_duplicate(self.finding_a, self.finding_b)
+        self.assertEqual(self.finding_b.original_finding.first().id, self.finding_a.id)
+        self.finding_a.delete()
+        self.assertEqual(self.finding_a.id, None)
+        self.assertEqual(self.finding_b.original_finding.first(), None)
+
+    # # if the original is deleted all duplicates should be deleted
+    @override_settings(DUPLICATE_CLUSTER_CASCADE_DELETE=True)
+    def test_set_duplicate_exception_delete_original_cascade(self):
+        set_duplicate(self.finding_a, self.finding_b)
+        self.assertEqual(self.finding_b.original_finding.first().id, self.finding_a.id)
+        logger.debug("going to delete finding B")
+        self.finding_b.delete()
+        logger.debug("deleted finding B")
+        with self.assertRaises(Finding.DoesNotExist):
+            self.finding_a = Finding.objects.get(id=self.finding_a.id)
+        self.assertEqual(self.finding_b.id, None)
+
+    # if the original is deleted all duplicates should adjusted to a new original
+    @override_settings(DUPLICATE_CLUSTER_CASCADE_DELETE=False)
+    def test_set_duplicate_exception_delete_original_duplicates_adapt(self):
+        set_duplicate(self.finding_a, self.finding_b)
+        set_duplicate(self.finding_c, self.finding_b)
+        self.assertEqual(self.finding_b.original_finding.first().id, self.finding_a.id)
+        logger.debug("going to delete finding B")
+        b_active = self.finding_b.active
+        b_id = self.finding_b.id
+        self.finding_b.delete()
+        logger.debug("deleted finding B")
+        self.finding_a.refresh_from_db()
+        self.finding_c.refresh_from_db()
+        self.assertEqual(self.finding_a.original_finding.first(), self.finding_c)
+        self.assertEqual(self.finding_a.duplicate_finding, None)
+        self.assertEqual(self.finding_a.duplicate, False)
+        self.assertEqual(self.finding_a.active, b_active)
+
+        self.assertEqual(self.finding_c.original_finding.first(), None)
+        self.assertEqual(self.finding_c.duplicate_finding, self.finding_a)
+        self.assertEqual(self.finding_c.duplicate, True)
+        self.assertEqual(self.finding_c.active, False)
+        with self.assertRaises(Finding.DoesNotExist):
+            self.finding_b = Finding.objects.get(id=b_id)
+
+    # if the original is deleted all duplicates should adjusted to a new original
+    # in this test there's only 1 duplicate, so that should be marked as no longer duplicate
+    @override_settings(DUPLICATE_CLUSTER_CASCADE_DELETE=False)
+    def test_set_duplicate_exception_delete_original_1_duplicate_adapt(self):
+        set_duplicate(self.finding_a, self.finding_b)
+        self.assertEqual(self.finding_b.original_finding.first().id, self.finding_a.id)
+        logger.debug("going to delete finding B")
+        b_active = self.finding_b.active
+        b_id = self.finding_b.id
+        self.finding_b.delete()
+        logger.debug("deleted finding B")
+        self.finding_a.refresh_from_db()
+        self.assertEqual(self.finding_a.original_finding.first(), None)
+        self.assertEqual(self.finding_a.duplicate_finding, None)
+        self.assertEqual(self.finding_a.duplicate, False)
+        self.assertEqual(self.finding_a.active, b_active)
+        with self.assertRaises(Finding.DoesNotExist):
+            self.finding_b = Finding.objects.get(id=b_id)
+
+    def test_loop_relations_for_one(self):
+        # B -> B
+        self.finding_b.duplicate = True
+        self.finding_b.duplicate_finding = self.finding_b
+        super(Finding, self.finding_b).save(skip_validation=True)
+        candidates = Finding.objects.filter(duplicate_finding__isnull=False, original_finding__isnull=False).count()
+        self.assertEqual(candidates, 1)
+        loop_count = fix_loop_duplicates()
+        self.assertEqual(loop_count, 0)
+        candidates = Finding.objects.filter(duplicate_finding__isnull=False, original_finding__isnull=False).count()
+        self.assertEqual(candidates, 0)
+
+    # if two findings are connected with each other the fix_loop function should detect and remove the loop
+    def test_loop_relations_for_two(self):
+
+        # A -> B -> B
+        set_duplicate(self.finding_a, self.finding_b)
+        self.finding_b.duplicate = True
+        self.finding_b.duplicate_finding = self.finding_a
+
+        super(Finding, self.finding_a).save(skip_validation=True)
+        super(Finding, self.finding_b).save(skip_validation=True)
+
+        loop_count = fix_loop_duplicates()
+        self.assertEqual(loop_count, 0)
+
+        candidates = Finding.objects.filter(duplicate_finding__isnull=False, original_finding__isnull=False).count()
+        self.assertEqual(candidates, 0)
+
+        # Get latest status
+        self.finding_a = Finding.objects.get(id=self.finding_a.id)
+        self.finding_b = Finding.objects.get(id=self.finding_b.id)
+
+        # assert that A -> B  (or B -> A)?
+        if self.finding_a.duplicate_finding:
+            self.assertTrue(self.finding_a.duplicate)
+            self.assertEqual(self.finding_a.original_finding.count(), 0)
+        else:
+            self.assertFalse(self.finding_a.duplicate)
+            self.assertEqual(self.finding_a.original_finding.count(), 1)
+
+        if self.finding_b.duplicate_finding:
+            self.assertTrue(self.finding_b.duplicate)
+            self.assertEqual(self.finding_b.original_finding.count(), 0)
+        else:
+            self.assertFalse(self.finding_b.duplicate)
+            self.assertEqual(self.finding_b.original_finding.count(), 1)
+
+    # Similar Loop detection and deletion for three findings
+    def test_loop_relations_for_three(self):
+
+        # A -> B, B -> C, C -> A
+        set_duplicate(self.finding_a, self.finding_b)
+        self.finding_b.duplicate = True
+        self.finding_b.duplicate_finding = self.finding_c
+        self.finding_c.duplicate = True
+        self.finding_c.duplicate_finding = self.finding_a
+
+        super(Finding, self.finding_a).save(skip_validation=True)
+        super(Finding, self.finding_b).save(skip_validation=True)
+        super(Finding, self.finding_c).save(skip_validation=True)
+
+        loop_count = fix_loop_duplicates()
+        self.assertEqual(loop_count, 0)
+
+        # Get latest status
+        self.finding_a = Finding.objects.get(id=self.finding_a.id)
+        self.finding_b = Finding.objects.get(id=self.finding_b.id)
+        self.finding_c = Finding.objects.get(id=self.finding_c.id)
+
+        if self.finding_a.duplicate_finding:
+            self.assertTrue(self.finding_a.duplicate)
+            self.assertEqual(self.finding_a.original_finding.count(), 0)
+        else:
+            self.assertFalse(self.finding_a.duplicate)
+            self.assertEqual(self.finding_a.original_finding.count(), 2)
+
+        if self.finding_b.duplicate_finding:
+            self.assertTrue(self.finding_b.duplicate)
+            self.assertEqual(self.finding_b.original_finding.count(), 0)
+        else:
+            self.assertFalse(self.finding_b.duplicate)
+            self.assertEqual(self.finding_b.original_finding.count(), 2)
+
+        if self.finding_c.duplicate_finding:
+            self.assertTrue(self.finding_c.duplicate)
+            self.assertEqual(self.finding_c.original_finding.count(), 0)
+        else:
+            self.assertFalse(self.finding_c.duplicate)
+            self.assertEqual(self.finding_c.original_finding.count(), 2)
+
+    # Another loop-test for 4 findings
+    def test_loop_relations_for_four(self):
+        self.finding_d = copy_model_util(Finding.objects.get(id=4), exclude_fields=["duplicate_finding"])
+        self.finding_d.duplicate = False
+        self.finding_d.save()
+
+        # A -> B, B -> C, C -> D, D -> A
+        set_duplicate(self.finding_a, self.finding_b)
+        self.finding_b.duplicate = True
+        self.finding_b.duplicate_finding = self.finding_c
+        self.finding_c.duplicate = True
+        self.finding_c.duplicate_finding = self.finding_d
+        self.finding_d.duplicate = True
+        self.finding_d.duplicate_finding = self.finding_a
+
+        super(Finding, self.finding_a).save(skip_validation=True)
+        super(Finding, self.finding_b).save(skip_validation=True)
+        super(Finding, self.finding_c).save(skip_validation=True)
+        super(Finding, self.finding_d).save(skip_validation=True)
+
+        loop_count = fix_loop_duplicates()
+        self.assertEqual(loop_count, 0)
+
+        # Get latest status
+        self.finding_a = Finding.objects.get(id=self.finding_a.id)
+        self.finding_b = Finding.objects.get(id=self.finding_b.id)
+        self.finding_c = Finding.objects.get(id=self.finding_c.id)
+        self.finding_d = Finding.objects.get(id=self.finding_d.id)
+
+        if self.finding_a.duplicate_finding:
+            self.assertTrue(self.finding_a.duplicate)
+            self.assertEqual(self.finding_a.original_finding.count(), 0)
+        else:
+            self.assertFalse(self.finding_a.duplicate)
+            self.assertEqual(self.finding_a.original_finding.count(), 3)
+
+        if self.finding_b.duplicate_finding:
+            self.assertTrue(self.finding_b.duplicate)
+            self.assertEqual(self.finding_b.original_finding.count(), 0)
+        else:
+            self.assertFalse(self.finding_b.duplicate)
+            self.assertEqual(self.finding_b.original_finding.count(), 3)
+
+        if self.finding_c.duplicate_finding:
+            self.assertTrue(self.finding_c.duplicate)
+            self.assertEqual(self.finding_c.original_finding.count(), 0)
+        else:
+            self.assertFalse(self.finding_c.duplicate)
+            self.assertEqual(self.finding_c.original_finding.count(), 3)
+
+        if self.finding_d.duplicate_finding:
+            self.assertTrue(self.finding_d.duplicate)
+            self.assertEqual(self.finding_d.original_finding.count(), 0)
+        else:
+            self.assertFalse(self.finding_d.duplicate)
+            self.assertEqual(self.finding_d.original_finding.count(), 3)
+
+    # Similar Loop detection and deletion for three findings
+    def test_list_relations_for_three(self):
+
+        # A -> B, B -> C
+        set_duplicate(self.finding_a, self.finding_b)
+        self.finding_b.duplicate = True
+        self.finding_b.duplicate_finding = self.finding_c
+
+        super(Finding, self.finding_a).save(skip_validation=True)
+        super(Finding, self.finding_b).save(skip_validation=True)
+        super(Finding, self.finding_c).save(skip_validation=True)
+
+        loop_count = fix_loop_duplicates()
+        self.assertEqual(loop_count, 0)
+
+        self.finding_a = Finding.objects.get(id=self.finding_a.id)
+        self.finding_b = Finding.objects.get(id=self.finding_b.id)
+        self.finding_c = Finding.objects.get(id=self.finding_c.id)
+
+        # A -> C, B -> C
+        self.assertTrue(self.finding_b.duplicate)
+        self.assertTrue(self.finding_a.duplicate)
+        self.assertFalse(self.finding_c.duplicate)
+        self.assertEqual(self.finding_b.duplicate_finding.id, self.finding_c.id)
+        self.assertEqual(self.finding_a.duplicate_finding.id, self.finding_c.id)
+        self.assertEqual(self.finding_c.duplicate_finding, None)
+        self.assertEqual(self.finding_a.duplicate_finding_set().count(), 2)
+        self.assertEqual(self.finding_b.duplicate_finding_set().count(), 2)
+
+    def test_list_relations_for_three_reverse(self):
+        # C -> B, B -> A
+        set_duplicate(self.finding_c, self.finding_b)
+        self.finding_b.duplicate = True
+        self.finding_b.duplicate_finding = self.finding_a
+
+        super(Finding, self.finding_a).save(skip_validation=True)
+        super(Finding, self.finding_b).save(skip_validation=True)
+        super(Finding, self.finding_c).save(skip_validation=True)
+
+        loop_count = fix_loop_duplicates()
+        self.assertEqual(loop_count, 0)
+
+        self.finding_a = Finding.objects.get(id=self.finding_a.id)
+        self.finding_b = Finding.objects.get(id=self.finding_b.id)
+        self.finding_c = Finding.objects.get(id=self.finding_c.id)
+
+        # B -> A, C -> A
+        self.assertTrue(self.finding_b.duplicate)
+        self.assertTrue(self.finding_c.duplicate)
+        self.assertFalse(self.finding_a.duplicate)
+        self.assertEqual(self.finding_b.duplicate_finding.id, self.finding_a.id)
+        self.assertEqual(self.finding_c.duplicate_finding.id, self.finding_a.id)
+        self.assertEqual(self.finding_a.duplicate_finding, None)
+        self.assertEqual(self.finding_c.duplicate_finding_set().count(), 2)
+        self.assertEqual(self.finding_b.duplicate_finding_set().count(), 2)
+
+    # Test that Delete Duplicate Findings & Maximum Duplicate is correctly deleting olding finding first based off of finding date value
+    def test_delete_duplicate_order(self):
+        # Turn on delete duplicates and set the maximum dedupe value to 1
+        system_settings = System_Settings.objects.get(no_cache=True)
+        system_settings.delete_duplicates = True
+        system_settings.max_dupes = 1
+        system_settings.save()
+
+        # Add dates to finding b and c
+        self.finding_b.date = "2024-01-01"
+        self.finding_c.date = "2023-01-01"
+        # Make findings b and c duplicates of a
+        set_duplicate(self.finding_b, self.finding_a)
+        set_duplicate(self.finding_c, self.finding_a)
+
+        # Perform delete dedupe logic
+        _async_dupe_delete_impl()
+
+        # Finding C (2023) should be deleted
+        self.assertFalse(
+            Finding.objects.filter(id=self.finding_c.id).exists(),
+            "The oldest duplicate (Finding c) should have been deleted.",
+        )
+        # Finding b (2024) should exist
+        self.assertTrue(
+            Finding.objects.filter(id=self.finding_b.id).exists(),
+            "The newest duplicate (Finding B) should still exist.",
+        )
+        # Finding A should now only have 1 duplicate in its set
+        self.finding_a.refresh_from_db()
+        self.assertEqual(self.finding_a.duplicate_finding_set().count(), 1)
+
+    def test_delete_duplicate_excess_with_chained_reference(self):
+        """
+        A surviving finding that points at an excess duplicate (a chained duplicate, from past
+        bugs or high parallel load) must not be left dangling. The duplicate_finding self-FK is
+        ON DELETE DO_NOTHING, so without re-pointing the survivor first the delete leaves a
+        reference to a deleted row. Django defers FK checks to COMMIT, so in production that
+        surfaces as an IntegrityError that rolls the chunk back and makes the periodic task
+        retry the same finding forever; inside a TestCase transaction it surfaces as the
+        dangling reference and failed constraint check asserted below.
+        """
+        system_settings = System_Settings.objects.get(no_cache=True)
+        system_settings.delete_duplicates = True
+        system_settings.max_dupes = 1
+        system_settings.save()
+
+        self.finding_b.date = "2024-01-01"
+        self.finding_c.date = "2023-01-01"
+        set_duplicate(self.finding_b, self.finding_a)
+        set_duplicate(self.finding_c, self.finding_a)
+
+        # A fourth finding chained onto the excess duplicate C. set_duplicate would
+        # normalize the chain to the root, so wire the pathological state directly,
+        # the way it exists in the wild.
+        finding_x = copy_model_util(Finding.objects.get(id=4), exclude_fields=["duplicate_finding"])
+        finding_x.title = "X: " + finding_x.title
+        finding_x.hash_code = None
+        finding_x.duplicate = True
+        finding_x.duplicate_finding = self.finding_c
+        finding_x.save()
+
+        try:
+            _async_dupe_delete_impl()
+
+            self.assertFalse(
+                Finding.objects.filter(id=self.finding_c.id).exists(),
+                "The excess duplicate (Finding C) should have been deleted despite the chained reference.",
+            )
+            self.assertFalse(
+                Finding.objects.filter(duplicate_finding_id=self.finding_c.id).exists(),
+                "No finding may still reference the deleted duplicate.",
+            )
+            # The check Postgres would run at COMMIT in production, where a leftover
+            # reference is the IntegrityError that wedges the periodic task.
+            connection.check_constraints()
+            self.assertTrue(
+                Finding.objects.filter(id=self.finding_b.id).exists(),
+                "The newest duplicate (Finding B) should still exist.",
+            )
+
+            finding_x.refresh_from_db()
+            self.assertEqual(
+                finding_x.duplicate_finding_id,
+                self.finding_a.id,
+                "The chained survivor should be re-pointed at the cluster's surviving root.",
+            )
+            self.assertTrue(finding_x.duplicate, "The chained survivor stays a duplicate, now of the root.")
+        finally:
+            if finding_x.id and Finding.objects.filter(id=finding_x.id).exists():
+                finding_x.delete()
+
+    def test_delete_duplicate_order_same_date_tiebreak_by_id(self):
+        """When duplicate findings share the same date, excess deletes use id as tie-break (oldest id first)."""
+        system_settings = System_Settings.objects.get(no_cache=True)
+        system_settings.delete_duplicates = True
+        system_settings.max_dupes = 1
+        system_settings.save()
+
+        same_date = "2024-06-01"
+        self.finding_b.date = same_date
+        self.finding_c.date = same_date
+        self.finding_b.save()
+        self.finding_c.save()
+
+        set_duplicate(self.finding_b, self.finding_a)
+        set_duplicate(self.finding_c, self.finding_a)
+
+        self.finding_b.refresh_from_db()
+        self.finding_c.refresh_from_db()
+        self.assertLess(
+            self.finding_b.id,
+            self.finding_c.id,
+            "Fixture setup should give finding_b a lower id than finding_c for this tie-break.",
+        )
+
+        _async_dupe_delete_impl()
+
+        self.assertFalse(
+            Finding.objects.filter(id=self.finding_b.id).exists(),
+            "The duplicate with lower id should be deleted when dates are identical.",
+        )
+        self.assertTrue(
+            Finding.objects.filter(id=self.finding_c.id).exists(),
+            "The duplicate with higher id should remain when dates are identical.",
+        )
+        self.finding_a.refresh_from_db()
+        self.assertEqual(self.finding_a.duplicate_finding_set().count(), 1)
+
+    def test_remove_loop_skips_a_finding_that_no_longer_exists(self):
+        """
+        Every call to removeLoop passes an id read earlier, so the row can be gone by the time
+        it runs: fix_loop_duplicates streams candidate ids through a cursor, and its callers run
+        while other workers delete findings. Fetching that id with get() turned the race into a
+        Finding.DoesNotExist that killed the whole caller -- observed aborting an async delete
+        task before it had prepared any duplicate cluster. A vanished row has no loop left to
+        repair, so removeLoop must skip it and return.
+        """
+        stale_id = self.finding_b.id
+        self.finding_b.delete()
+        self.assertIsNone(self.finding_b.id)
+
+        # Must not raise; there is nothing to repair and nothing to report.
+        self.assertIsNone(removeLoop(stale_id, 50))
+
+    def test_fix_loop_duplicates_survives_a_finding_deleted_mid_run(self):
+        """
+        The reported path end to end: a candidate id is deleted after fix_loop_duplicates has
+        streamed it but before removeLoop reaches it. The run must carry on and still repair the
+        loops whose findings are still there, instead of dying on the first stale id.
+        """
+        # Two independent self-loops. Candidates are streamed newest id first, so finding_c is
+        # repaired first and finding_b -- deleted while that happens -- is reached second.
+        for finding in (self.finding_b, self.finding_c):
+            finding.duplicate = True
+            finding.duplicate_finding = finding
+            super(Finding, finding).save(skip_validation=True)
+        self.assertLess(self.finding_b.id, self.finding_c.id)
+
+        doomed_id = self.finding_b.id
+        real_remove_loop = finding_helper.removeLoop
+        calls = []
+
+        def remove_loop_with_concurrent_delete(finding_id, counter):
+            if not calls:
+                # Stands in for the concurrent worker: the row goes away between the id being
+                # streamed and removeLoop being called with it.
+                Finding.objects.filter(id=doomed_id).delete()
+            calls.append(finding_id)
+            return real_remove_loop(finding_id, counter)
+
+        with patch.object(finding_helper, "removeLoop", side_effect=remove_loop_with_concurrent_delete):
+            loop_count = fix_loop_duplicates()
+        # Deleted by queryset above, so the instance still carries its old pk; clear it so
+        # tearDown does not try to delete the row a second time.
+        self.finding_b.id = None
+
+        self.assertIn(doomed_id, calls, "the deleted finding's id is still reached by the run")
+        self.assertEqual(loop_count, 0)
+
+        self.finding_c.refresh_from_db()
+        self.assertIsNone(self.finding_c.duplicate_finding, "the surviving self-loop is still repaired")
+        self.assertFalse(self.finding_c.duplicate)
+
+    def test_delete_all_engagements(self):
+        # make sure there is no exception when deleting all engagements
+        for engagement in Engagement.objects.all().order_by("id"):
+            engagement.delete()
+
+    def test_delete_all_products(self):
+        # make sure there is no exception when deleting all engagements
+        for product in Product.objects.all().order_by("id"):
+            product.delete()
