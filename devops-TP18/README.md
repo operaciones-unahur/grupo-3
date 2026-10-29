@@ -63,3 +63,16 @@ Comandos de Verificación Local
 # Otorgar permisos y ejecutar script de carga a DefectDojo 
 chmod +x scripts/verificar-defectdojo.sh 
 DEFECTDOJO_URL="http://localhost:8080" DEFECTDOJO_API_KEY="tu_token" ./scripts/verificar-defectdojo.sh 
+
+
+---
+
+## TP18B / TP18C / TP18D — Implementación
+
+Guía completa y desvíos respecto de los instructivos: [`docs/TP18-B-C-D.md`](docs/TP18-B-C-D.md).
+
+| TP | Qué | Dónde |
+|---|---|---|
+| 18B | DefectDojo en k3d con Helm (chart vendorizado) | `defectdojo-k8s/values-local.yaml`, `scripts/tp18b-0*.sh` |
+| 18C | Integración con GitHub (Actions, Issues, Projects) | `scripts/defectdojo-import.sh`, `scripts/tp18c-findings-a-issues.sh` |
+| 18D | Self-Hosted Runner (ARC) + pipeline | `runner-k8s/runnerdeployment.yaml`, `scripts/tp18d-0*.sh`, `../.github/workflows/devsecops-pipeline.yml` |

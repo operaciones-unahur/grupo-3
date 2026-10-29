@@ -1,0 +1,229 @@
+# =============================================================================
+# TP18D - Pipeline DevSecOps en Self-Hosted Runner (k3s/k3d) + ingesta a DefectDojo
+# UBICACION: GitHub solo ejecuta workflows de <raiz-del-repo>/.github/workflows/.
+#            El workflow viejo devops-TP18/.github/workflows/defectdojo-ci.yml
+#            NUNCA corre (esta en una subcarpeta). Este es el que vale.
+#
+# Diferencias deliberadas con el workflow del instructivo TP18D:
+#   * Rutas reales del repo (devops-TP18/backend, devops-TP18/devops-portfolio).
+#   * DefectDojo interno: puerto 80 del Service (no 8080).
+#   * Cada job escanea E INGESTA en el mismo pod (los runners son efimeros): los
+#     reportes con datos sensibles NO se suben como artifacts a GitHub Cloud.
+#   * ZAP en XML (el parser "ZAP Scan" de DefectDojo espera XML).
+#   * Gate final (Andon Cord) consultando DefectDojo como fuente de verdad.
+#   * Sin Schemathesis: NotesApp no expone OpenAPI/swagger (queda para el PIF).
+#   * Sin Cosign: no hay registry local ni identidad OIDC (queda para el PIF).
+# =============================================================================
+name: DevSecOps Pipeline (Self-Hosted k3s + DefectDojo)
+
+on:
+  push:
+    branches: [ main, "feature/**", "sec/**" ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  APP_DIR: devops-TP18
+  # Servicio interno de DefectDojo (release "defectdojo", namespace "defectdojo", puerto 80)
+  DEFECTDOJO_URL: http://defectdojo-django.defectdojo.svc.cluster.local
+  PRODUCT_NAME: Notes App
+  ENGAGEMENT_NAME: TP18 CI/CD Automated Security Audits
+  # Objetivo del DAST (Service del chart devops-portfolio)
+  ZAP_TARGET: http://frontend-service.devops-portfolio.svc.cluster.local
+  # Andon Cord: "false" en TP18 (solo informa). Ponelo en "true" (Settings > Variables) para el PIF.
+  ANDON_CORD_ENFORCE: ${{ vars.ANDON_CORD_ENFORCE || 'false' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # FASE 1 - Auditorias estaticas (shift-left): Hadolint, Render First + Checkov/Kube-linter,
+  #          Gitleaks, Semgrep, Trivy SCA
+  # ---------------------------------------------------------------------------
+  static-audits:
+    name: "Fase 1: Estaticos (Hadolint, Checkov, Kube-linter, Gitleaks, Semgrep, Trivy SCA)"
+    # Un runner self-hosted JAMAS debe ejecutar codigo de forks (riesgo de RCE en tu cluster)
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, k3s-local]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Instalar herramientas (versiones fijas)
+        run: bash ${APP_DIR}/scripts/setup-tools.sh hadolint gitleaks trivy kube-linter helm semgrep checkov
+
+      - name: Carpeta de reportes
+        run: mkdir -p reports-json
+
+      - name: Hadolint (ASVS V14)
+        run: |
+          hadolint -f json ${APP_DIR}/backend/Dockerfile  > reports-json/hadolint-backend.json  || true
+          hadolint -f json ${APP_DIR}/frontend/Dockerfile > reports-json/hadolint-frontend.json || true
+
+      - name: Render First (TP10B) - helm template
+        run: |
+          helm template notesapp ${APP_DIR}/devops-portfolio \
+            -f ${APP_DIR}/devops-portfolio/values-prod.yaml > manifests-rendered-prod.yaml
+
+      - name: Checkov sobre el manifiesto RENDERIZADO (ASVS V16)
+        run: checkov -f manifests-rendered-prod.yaml -o json > reports-json/checkov-report.json || true
+
+      - name: Kube-linter sobre el manifiesto renderizado
+        run: kube-linter lint manifests-rendered-prod.yaml --format json > reports-json/kubelinter-report.json || true
+
+      - name: Gitleaks (TP17) - historial completo, secretos redactados
+        run: gitleaks detect --source . --redact --report-format json --report-path reports-json/gitleaks-report.json || true
+
+      - name: Semgrep SAST (TP15)
+        run: |
+          semgrep scan --config=p/owasp-top-ten --config=p/python --config=p/dockerfile --config=p/kubernetes \
+            --json -o reports-json/semgrep-report.json \
+            ${APP_DIR}/backend ${APP_DIR}/frontend ${APP_DIR}/devops-portfolio || true
+
+      - name: Trivy SCA de dependencias (TP16)
+        run: trivy fs --scanners vuln --format json -o reports-json/trivy-sca-report.json ${APP_DIR}/backend || true
+
+      - name: Ingesta a DefectDojo (red interna del cluster)
+        env:
+          DEFECTDOJO_API_KEY: ${{ secrets.DEFECTDOJO_API_KEY }}
+        run: |
+          imp() { bash ${APP_DIR}/scripts/defectdojo-import.sh "$@"; }
+          imp "Hadolint Dockerfile check" reports-json/hadolint-backend.json  "Hadolint backend"
+          imp "Hadolint Dockerfile check" reports-json/hadolint-frontend.json "Hadolint frontend"
+          imp "Checkov Scan"              reports-json/checkov-report.json    "Checkov (helm renderizado)"
+          imp "KubeLinter Scan"           reports-json/kubelinter-report.json "Kube-linter (helm renderizado)"
+          imp "Gitleaks Scan"             reports-json/gitleaks-report.json   "Gitleaks"
+          imp "Semgrep JSON Report"       reports-json/semgrep-report.json    "Semgrep SAST"
+          imp "Trivy Scan"                reports-json/trivy-sca-report.json  "Trivy SCA"
+
+  # ---------------------------------------------------------------------------
+  # FASE 2 - Build inmutable, SBOM (Syft) y escaneo de la imagen (Trivy)
+  # ---------------------------------------------------------------------------
+  build-sbom-image:
+    name: "Fase 2: Build, SBOM (Syft) y Trivy de imagen"
+    needs: [static-audits]
+    if: always() && needs.static-audits.result != 'skipped'
+    runs-on: [self-hosted, k3s-local]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar herramientas
+        run: bash ${APP_DIR}/scripts/setup-tools.sh trivy syft
+
+      - name: Build de la imagen (tag = SHA, nunca latest)
+        run: docker build -t notesapp-backend:${{ github.sha }} ${APP_DIR}/backend
+
+      - name: SBOM CycloneDX con Syft (ASVS V10)
+        run: |
+          mkdir -p reports-json
+          syft dir:${APP_DIR}/backend -o cyclonedx-json=reports-json/sbom.cyclonedx.json
+
+      - name: Trivy sobre la imagen
+        run: trivy image --scanners vuln --format json -o reports-json/trivy-image-report.json notesapp-backend:${{ github.sha }} || true
+
+      - name: Ingesta a DefectDojo
+        env:
+          DEFECTDOJO_API_KEY: ${{ secrets.DEFECTDOJO_API_KEY }}
+        run: bash ${APP_DIR}/scripts/defectdojo-import.sh "Trivy Scan" reports-json/trivy-image-report.json "Trivy imagen backend"
+
+      - name: Publicar SBOM (no contiene secretos)
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-cyclonedx
+          path: reports-json/sbom.cyclonedx.json
+          retention-days: 14
+
+  # ---------------------------------------------------------------------------
+  # FASE 3 - DAST con OWASP ZAP contra la app DENTRO del cluster (nada expuesto a Internet)
+  # ---------------------------------------------------------------------------
+  dast:
+    name: "Fase 3: DAST (OWASP ZAP baseline)"
+    needs: [build-sbom-image]
+    if: always() && needs.build-sbom-image.result != 'skipped'
+    runs-on: [self-hosted, k3s-local]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verificar que NotesApp responde dentro del cluster
+        id: reach
+        run: |
+          if curl -fsS --max-time 10 -o /dev/null "$ZAP_TARGET"; then
+            echo "up=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::NotesApp no responde en $ZAP_TARGET (helm install del chart devops-portfolio?). Se omite el DAST."
+            echo "up=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: ZAP baseline (XML, para el parser "ZAP Scan")
+        if: steps.reach.outputs.up == 'true'
+        run: |
+          mkdir -p reports-json && chmod 777 reports-json   # el usuario "zap" del contenedor debe poder escribir
+          docker run --rm --network host -v "$PWD/reports-json:/zap/wrk:rw" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-baseline.py -t "$ZAP_TARGET" -x zap-report.xml -I || true
+
+      - name: Ingesta a DefectDojo
+        if: steps.reach.outputs.up == 'true'
+        env:
+          DEFECTDOJO_API_KEY: ${{ secrets.DEFECTDOJO_API_KEY }}
+        run: bash ${APP_DIR}/scripts/defectdojo-import.sh "ZAP Scan" reports-json/zap-report.xml "OWASP ZAP baseline"
+
+  # ---------------------------------------------------------------------------
+  # FASE 4 - Quality gate (Andon Cord) + Issues en GitHub desde DefectDojo
+  # ---------------------------------------------------------------------------
+  quality-gate:
+    name: "Fase 4: Quality Gate (Andon Cord) y sync de Issues"
+    needs: [static-audits, build-sbom-image, dast]
+    if: always() && needs.static-audits.result != 'skipped'
+    runs-on: [self-hosted, k3s-local]
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Contar hallazgos activos Critical/High en DefectDojo
+        id: count
+        env:
+          DEFECTDOJO_API_KEY: ${{ secrets.DEFECTDOJO_API_KEY }}
+        run: |
+          api() { curl -fsS -H "Authorization: Token $DEFECTDOJO_API_KEY" -G "$@"; }
+          PID=$(api "$DEFECTDOJO_URL/api/v2/products/" --data-urlencode "name=$PRODUCT_NAME" | jq -r '.results[0].id // empty')
+          [ -n "$PID" ] || { echo "::error::Producto '$PRODUCT_NAME' no existe en DefectDojo"; exit 1; }
+          cnt() { api "$DEFECTDOJO_URL/api/v2/findings/" --data-urlencode "active=true" --data-urlencode "duplicate=false" \
+                   --data-urlencode "severity=$1" --data-urlencode "test__engagement__product=$PID" --data-urlencode "limit=1" | jq .count; }
+          C=$(cnt Critical); H=$(cnt High)
+          echo "critical=$C" >> "$GITHUB_OUTPUT"; echo "high=$H" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Quality Gate (fuente de verdad: DefectDojo)"
+            echo "| Severidad | Activos |"; echo "|---|---|"
+            echo "| Critical | $C |"; echo "| High | $H |"
+            echo "Andon Cord enforce: **$ANDON_CORD_ENFORCE**"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Crear Issues en GitHub para Critical/High (TP18C)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          DEFECTDOJO_API_KEY: ${{ secrets.DEFECTDOJO_API_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: bash ${APP_DIR}/scripts/tp18c-findings-a-issues.sh
+
+      - name: Andon Cord
+        run: |
+          T=$(( ${{ steps.count.outputs.critical }} + ${{ steps.count.outputs.high }} ))
+          if [ "$T" -gt 0 ] && [ "$ANDON_CORD_ENFORCE" = "true" ]; then
+            echo "::error::Andon Cord: $T hallazgos Critical/High activos en DefectDojo."; exit 1
+          elif [ "$T" -gt 0 ]; then
+            echo "::warning::$T hallazgos Critical/High activos (Andon Cord no bloqueante en TP18)."
+          fi

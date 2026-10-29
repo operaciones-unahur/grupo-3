@@ -1,0 +1,59 @@
+# =============================================================================
+# TP18B - values-local.yaml para el chart VENDORIZADO del repo:
+#   devops-TP18/django-DefectDojo/helm/defectdojo   (chart 1.9.57 / DefectDojo 3.4.101)
+#
+# Diferencias con el values del instructivo TP18B (que NO funciona con este chart):
+#   * No existe la seccion `redis:` -> el chart usa `valkey:` y si encuentra
+#     `redis:` ABORTA el install (ver templates/secret-valkey.yaml).
+#   * No existe `django.uwsgi.adminPassword` / `django.secretKey` -> viven en el
+#     Secret `defectdojo` (se crea con scripts/tp18b-01-crear-secretos.sh).
+#   * No hay `postgresql.postgresqlPassword`: usa `postgresql.auth.existingSecret`.
+#   * NINGUNA contrasena va en este archivo (Gitleaks / ASVS V15, CWE-798).
+# =============================================================================
+
+# Host del Ingress. Con el cluster del TP13C el load balancer de k3d publica
+# 127.0.0.1:18080 -> :80, asi que se entra por http://defectdojo.local:18080
+host: defectdojo.local
+siteUrl: "http://defectdojo.local:18080"
+
+# Django valida el header Host (DD_ALLOWED_HOSTS). Si falta el nombre interno,
+# el runner dentro del cluster recibe HTTP 400 (DisallowedHost) al ingestar.
+alternativeHosts:
+  - defectdojo-django
+  - defectdojo-django.defectdojo
+  - defectdojo-django.defectdojo.svc
+  - defectdojo-django.defectdojo.svc.cluster.local
+  - localhost
+
+imagePullPolicy: IfNotPresent
+
+# Los Secrets los crea tp18b-01-crear-secretos.sh (nombres que espera el chart):
+createSecret: false            # Secret "defectdojo"
+createPostgresqlSecret: false  # Secret "defectdojo-postgresql-specific"
+createValkeySecret: false      # Secret "defectdojo-valkey-specific"
+
+django:
+  replicas: 1
+  ingress:
+    enabled: true
+    ingressClassName: nginx     # el cluster del TP13C deshabilita Traefik y usa ingress-nginx
+    activateTLS: false          # entorno local por HTTP (con true exige el Secret defectdojo-tls)
+    annotations:
+      # Reportes pesados (ZAP/Trivy) e ingestas lentas
+      nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+      nginx.ingress.kubernetes.io/proxy-read-timeout: "120"
+      nginx.ingress.kubernetes.io/proxy-send-timeout: "120"
+
+celery:
+  worker:
+    appSettings:
+      poolType: solo            # minimo consumo de RAM para laptop
+
+postgresql:
+  enabled: true
+  primary:
+    persistence:
+      enabled: true
+
+valkey:
+  enabled: true                 # reemplaza al Redis del instructivo

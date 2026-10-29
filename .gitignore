@@ -1,0 +1,4 @@
+# TP18B: credenciales locales generadas por scripts/tp18b-01-crear-secretos.sh
+devops-TP18/.secrets/
+*.pyc
+__pycache__/

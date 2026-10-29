@@ -1,0 +1,44 @@
+# TP18D - Self-Hosted Runner en k3s/k3d con Actions Runner Controller (ARC "summerwind", v0.23.7)
+# Aplicar DESPUES de instalar ARC:  kubectl apply -f runner-k8s/runnerdeployment.yaml
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: runner-sa
+  namespace: actions-runner-system
+# Privilegio minimo (RBAC): el runner NO necesita hablar con la API de Kubernetes,
+# asi que no se le monta token ni se le da ningun Role/ClusterRole. Nunca cluster-admin.
+automountServiceAccountToken: false
+---
+apiVersion: actions.summerwind.dev/v1alpha1
+kind: RunnerDeployment
+metadata:
+  name: notesapp-runnerdeploy
+  namespace: actions-runner-system
+spec:
+  replicas: 1
+  template:
+    spec:
+      repository: operaciones-unahur/grupo-3
+      ephemeral: true                  # 1 pod = 1 job; se destruye al terminar
+      serviceAccountName: runner-sa
+      # Label propio: los workflows usan runs-on: [self-hosted, k3s-local]
+      # para que ningun job caiga en un runner equivocado.
+      labels:
+        - k3s-local
+      # Contencion de recursos (valores del TP18D)
+      resources:
+        requests:
+          cpu: "200m"
+          memory: "512Mi"
+        limits:
+          cpu: "2000m"
+          memory: "2Gi"
+      # El sidecar Docker (dind) tambien se limita para no ahogar a DefectDojo/Postgres
+      dockerdContainerResources:
+        requests:
+          cpu: "100m"
+          memory: "256Mi"
+        limits:
+          cpu: "2000m"
+          memory: "2Gi"

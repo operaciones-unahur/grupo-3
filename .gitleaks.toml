@@ -1,0 +1,11 @@
+# Config de Gitleaks (raiz del repo). Usa las reglas por defecto y excluye SOLO el codigo
+# de terceros vendorizado (django-DefectDojo), que trae cadenas de prueba y ahogaria el reporte.
+# El codigo propio (backend, chart, referencias-tp) sigue 100% escaneado.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Codigo upstream vendorizado"
+paths = [
+  '''devops-TP18/django-DefectDojo/.*''',
+]
