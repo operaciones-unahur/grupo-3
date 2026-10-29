@@ -1,0 +1,37 @@
+name: "Hardening de Infraestructura y Seguridad"
+description: "Requerimiento técnico alineado a OWASP ASVS v5.0.0"
+title: "[SEC-HARDENING]: "
+labels: ["security", "hardening", "devsecops"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: "### Registro de tarea de seguridad"
+  - type: textarea
+    id: descripcion
+    attributes:
+      label: "Descripción"
+      placeholder: "Qué vamos a implementar y por qué."
+    validations:
+      required: true
+  - type: input
+    id: asvs-ref
+    attributes:
+      label: "Referencia OWASP ASVS v5.0.0"
+      placeholder: "ID y nombre del control (validar contra el documento oficial)"
+    validations:
+      required: true
+  - type: dropdown
+    id: puntos
+    attributes:
+      label: "Puntos Fibonacci"
+      options: ["1", "2", "3", "5", "8", "13"]
+    validations:
+      required: true
+  - type: textarea
+    id: criterios
+    attributes:
+      label: "Criterios de aceptación (Gherkin)"
+      placeholder: "Given... When... Then..."
+    validations:
+      required: true
